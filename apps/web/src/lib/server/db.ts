@@ -1,9 +1,10 @@
 import "server-only";
 import { Pool } from "pg";
+import { createDb, type Database } from "@/db/client";
 
 // One pool per server process. In dev, hot reload re-evaluates modules,
 // so the pool is cached on globalThis to avoid leaking connections.
-const globalForDb = globalThis as unknown as { pgPool?: Pool };
+const globalForDb = globalThis as unknown as { pgPool?: Pool; db?: Database };
 
 export function getPool(): Pool {
   if (!globalForDb.pgPool) {
@@ -19,4 +20,9 @@ export function getPool(): Pool {
     });
   }
   return globalForDb.pgPool;
+}
+
+export function getDb(): Database {
+  globalForDb.db ??= createDb(getPool());
+  return globalForDb.db;
 }

@@ -230,28 +230,47 @@ The n8n instance belongs to another Compose stack. Our stack reaches it via `hos
 
 ### 4.1 Project lifecycle (state machine)
 
+Implemented in Step 2. Source of truth: `apps/web/src/server/domain/workflow-states.ts`, mirrored in the `workflow_status_transitions` table and enforced by database triggers.
+
 ```mermaid
 stateDiagram-v2
-    [*] --> DRAFT: client submits brief
-    DRAFT --> GENERATING_CONCEPTS: dispatch concepts job
-    GENERATING_CONCEPTS --> CONCEPTS_READY: job.completed
-    GENERATING_CONCEPTS --> FAILED: job.failed
-    CONCEPTS_READY --> REFINING: refine request on a concept
-    REFINING --> CONCEPTS_READY: revision delivered / failed (non-fatal)
-    CONCEPTS_READY --> GENERATING_CONCEPTS: "generate more" (all rejected)
-    CONCEPTS_READY --> DESIGN_FINALIZED: client finalizes one concept version
-    DESIGN_FINALIZED --> GENERATING_VIEWS: dispatch views job
-    GENERATING_VIEWS --> VIEWS_READY: 4 views delivered
-    VIEWS_READY --> GENERATING_VIEWS: regenerate one or more views
-    VIEWS_READY --> VIEWS_APPROVED: client approves all 4 views
-    VIEWS_APPROVED --> EXPORTING: dispatch drive export job
-    EXPORTING --> DELIVERED: job.completed (Drive IDs stored)
-    EXPORTING --> VIEWS_APPROVED: job.failed (retryable)
-    FAILED --> DRAFT: retry
-    DELIVERED --> [*]
+    [*] --> DRAFT: project created
+    DRAFT --> GENERATING_CONCEPTS
+    GENERATING_CONCEPTS --> CONCEPT_REVIEW: ≥1 concept has an image
+    GENERATING_CONCEPTS --> FAILED
+    CONCEPT_REVIEW --> GENERATING_CONCEPTS: generate more
+    CONCEPT_REVIEW --> REFINING: refinement requested
+    REFINING --> CONCEPT_REVIEW: revision READY or FAILED (non-fatal)
+    CONCEPT_REVIEW --> FINALIZING: client picks concept (+ optional revision)
+    FINALIZING --> CONCEPT_REVIEW: finalization cancelled
+    FINALIZING --> GENERATING_VIEWS: final design FINALIZED
+    FINALIZING --> FAILED
+    GENERATING_VIEWS --> VIEW_REVIEW: 4 current views READY/APPROVED
+    GENERATING_VIEWS --> FAILED
+    VIEW_REVIEW --> GENERATING_VIEWS: regenerate view(s)
+    VIEW_REVIEW --> UPLOADING_TO_DRIVE: 4 current views APPROVED
+    UPLOADING_TO_DRIVE --> COMPLETED: 4 drive_file_ids stored
+    UPLOADING_TO_DRIVE --> FAILED
+    FAILED --> GENERATING_CONCEPTS: retry (only to failed_from_status)
+    FAILED --> FINALIZING: retry
+    FAILED --> GENERATING_VIEWS: retry
+    FAILED --> UPLOADING_TO_DRIVE: retry
+    COMPLETED --> [*]
 ```
 
-The state machine lives in a pure TypeScript module (`server/domain/projectStateMachine.ts`) with full unit-test coverage. Every BFF mutation and every callback goes through it. An illegal transition, such as a late callback for a superseded job, is rejected and logged, never applied.
+| Entity | Statuses | Transitions (initial → …) |
+|---|---|---|
+| Concept | GENERATING, READY, SELECTED, REJECTED, REFINING, FINAL, FAILED | new→GENERATING/READY; GENERATING→READY/FAILED; READY→SELECTED/REJECTED/REFINING/FINAL; SELECTED→READY/REJECTED/REFINING/FINAL; REJECTED→READY; REFINING→READY/SELECTED; FAILED→GENERATING; FINAL terminal |
+| Revision | GENERATING, READY, SELECTED, FAILED | new→GENERATING/READY; GENERATING→READY/FAILED; READY↔SELECTED; FAILED terminal |
+| Final design | PENDING, FINALIZED, CANCELLED | new→PENDING; PENDING→FINALIZED/CANCELLED |
+| Final view | GENERATING, READY, APPROVED, FAILED | new→GENERATING; GENERATING→READY/FAILED; READY↔APPROVED; FAILED terminal (regeneration = new version row) |
+
+**Enforcement (database is authoritative):**
+- `enforce_status_transition` trigger on every table rejects any status change (and any initial status on insert) not listed in `workflow_status_transitions`. SQLSTATE `23514`, constraint `workflow_status_transition`.
+- `enforce_project_rules` trigger: entering FAILED stores `failed_from_status`; leaving FAILED is only allowed back to that status; guards for CONCEPT_REVIEW, GENERATING_VIEWS, VIEW_REVIEW, UPLOADING_TO_DRIVE, COMPLETED (constraint `workflow_guard`); sets `finalized_at` on COMPLETED.
+- Phase guards: concepts can only be inserted during GENERATING_CONCEPTS, revisions during REFINING, final designs changed during FINALIZING, views inserted during GENERATING_VIEWS. Late callbacks for a project that has moved on are therefore rejected by the database.
+- The service layer (`apps/web/src/server/workflow/`) pre-checks the same rules for typed errors (`InvalidStateTransitionError`, `WorkflowGuardError`), locks rows (`SELECT … FOR UPDATE`) and writes the status change and its `project_events` row in one transaction.
+- A test fails if the TypeScript map and the database table ever drift apart.
 
 ### 4.2 Generic async job sequence
 
@@ -284,7 +303,7 @@ sequenceDiagram
         B->>DB: INSERT concept + version + asset
     end
     N->>B: POST callback job.completed
-    B->>DB: job → SUCCEEDED, project → CONCEPTS_READY
+    B->>DB: job → SUCCEEDED, project → CONCEPT_REVIEW
 ```
 
 ### 4.3 Flow-by-flow summary
@@ -295,10 +314,10 @@ sequenceDiagram
 | 2 | Approve (shortlist) / reject (with optional reason) | Update concept status. No n8n call | — | — | — | Status persisted |
 | 3 | Generate more (optional) | Dispatch `concepts.generate` with rejected concepts and reasons as negative context | `WF-01` | Avoid rejected directions | Text-to-image | Additional concepts |
 | 4 | Refine concept ("make the handle thinner, matte black") | Dispatch `concept.refine` with current version and full revision history | `WF-02` | Interpret request into a structured edit: changes, attributes to preserve, edit prompt, updated spec | Image **edit** using the current version as reference | New concept **version** (old versions retained) |
-| 5 | Finalize one concept version | Lock it (`DESIGN_FINALIZED`). Dispatch `views.generate` | `WF-03` | Produce a canonical design spec and per-view prompts (front/back/left/right) with consistency constraints | 4 reference-conditioned generations from the final image | 4 draft views |
+| 5 | Finalize one concept version | Create final design (`FINALIZING`), confirm, dispatch `views.generate` | `WF-03` | Produce a canonical design spec and per-view prompts (front/back/left/right) with consistency constraints | 4 reference-conditioned generations from the final image | 4 draft views |
 | 6 | Regenerate a view (optional feedback) | Dispatch `views.generate` with `views: ["left"]` and feedback | `WF-03` | Adjust that view's prompt | Reference-conditioned regeneration | New view version |
-| 7 | Approve all 4 views | `VIEWS_APPROVED`. Dispatch `drive.export` | `WF-04` | — | — | Drive folder + files + `manifest.json` |
-| 8 | View delivery | Show Drive links and status `DELIVERED` | — | — | — | Done. Milestone 2 picks up from Drive |
+| 7 | Approve all 4 views | `UPLOADING_TO_DRIVE`. Dispatch `drive.export` | `WF-04` | — | — | Drive folder + files + `manifest.json` |
+| 8 | View delivery | Show Drive links and status `COMPLETED` | — | — | — | Done. Milestone 2 picks up from Drive |
 
 ---
 
@@ -312,32 +331,33 @@ PostgreSQL is **required**. It stores sessions, ownership, approval history, rev
 - n8n state is **not** stored here:
   - Testing: the shared local n8n keeps its own SQLite.
   - Production: the VPS n8n uses whatever database that instance has. If we provision it ourselves via the `n8n` Compose profile, it gets a separate `n8n` database and `n8n_user` role on this server, with no cross-database access.
-- Created by `infra/postgres/init/01-init.sql` on first start.
+- Created by `infra/postgres/init/01-create-databases.sh` on first start. Schema migrations run in the one-shot `migrate` Compose service before `web` starts.
 - Product state never depends on n8n's database. Moving between n8n instances (local → VPS) loses no product data.
 
-### 5.2 App schema (logical)
+### 5.2 App schema (implemented in Step 2)
 
-| Table | Purpose | Key columns |
+Migrations: `apps/web/drizzle/0000_init_workflow_schema.sql` (generated from `apps/web/src/db/schema.ts`) and `0001_workflow_triggers.sql` (transition table seed, triggers, guards).
+
+| Table | Columns | Integrity |
 |---|---|---|
-| `users`, `sessions`, `accounts`, `verifications` | Better Auth tables | `role` (`client` \| `admin`) on `users` |
-| `projects` | One design request | `id` (uuid), `owner_id`, `title`, `brief`, `constraints` (jsonb), `concept_count`, `status` (enum, §4.1), `final_concept_version_id`, `drive_folder_id`, `drive_folder_url`, `created_at`, `updated_at`, `delivered_at` |
-| `concepts` | One design direction within a project | `id`, `project_id`, `ordinal`, `title`, `status` (`PENDING`\|`SHORTLISTED`\|`REJECTED`\|`FINAL`), `rejection_reason`, `current_version_id` |
-| `concept_versions` | Immutable revision lineage | `id`, `concept_id`, `version_no`, `parent_version_id`, `spec` (jsonb: Claude's structured concept), `image_prompt`, `refinement_request_id`, `asset_id`, `created_at` |
-| `refinement_requests` | Client refinement text + Claude's interpretation | `id`, `concept_id`, `from_version_id`, `instruction` (raw client text), `interpretation` (jsonb), `job_id`, `created_at` |
-| `view_sets` | One set of four views for a finalized design | `id`, `project_id`, `concept_version_id`, `status` (`GENERATING`\|`READY`\|`APPROVED`\|`EXPORTED`), `approved_at`, `approved_by` |
-| `views` | One angle (versioned) | `id`, `view_set_id`, `angle` (`FRONT`\|`BACK`\|`LEFT`\|`RIGHT`), `version_no`, `is_current`, `feedback`, `asset_id`, `drive_file_id` |
-| `assets` | Every stored image | `id`, `project_id`, `kind` (`CONCEPT`\|`VIEW`\|`REFERENCE`), `storage_key`, `mime_type`, `width`, `height`, `bytes`, `sha256`, `provider`, `model`, `created_at` |
-| `jobs` | Every n8n dispatch | `id`, `project_id`, `type` (`CONCEPTS_GENERATE`\|`CONCEPT_REFINE`\|`VIEWS_GENERATE`\|`DRIVE_EXPORT`), `status` (`QUEUED`\|`RUNNING`\|`SUCCEEDED`\|`FAILED`\|`TIMED_OUT`\|`SUPERSEDED`), `idempotency_key` (unique), `callback_token_hash`, `n8n_execution_id`, `request_payload` (jsonb), `progress` (jsonb), `error` (jsonb), `attempt`, `started_at`, `finished_at`, `deadline_at` |
-| `audit_events` | Append-only record of approvals/rejections/finalization/export | `id`, `project_id`, `actor_id` (nullable for system), `type`, `payload` (jsonb), `created_at` |
-| `usage_ledger` (recommended) | Cost control | `id`, `job_id`, `provider`, `model`, `input_tokens`, `output_tokens`, `images_generated`, `created_at` |
+| `projects` | `id` uuid, `project_name`, `client_name`, `design_brief`, `status` (project_status), `failed_from_status`, `failure_reason`, `created_at`, `updated_at`, `finalized_at` | length checks; `failed_from_status` set iff FAILED; `finalized_at` set iff COMPLETED; indexes on (status, updated_at), created_at, client_name |
+| `concepts` | `id`, `project_id`→projects (cascade), `concept_number`, `title`, `description`, `creative_direction`, `key_features` text[], `materials` text[], `generation_prompt`, `image_url`, `status`, `created_at`, `updated_at` | unique (project_id, concept_number); image required unless GENERATING/FAILED; index (project_id, status) |
+| `revisions` | `id`, `concept_id`→concepts (cascade), `revision_number`, `client_feedback`, `interpreted_instruction` jsonb (Claude's structured interpretation), `generation_prompt`, `image_url`, `status`, `created_at` | unique (concept_id, revision_number); at most one GENERATING and one SELECTED revision per concept |
+| `final_designs` | `id`, `project_id`→projects (cascade), `approved_concept_id`, `approved_revision_id`, `master_image`, `status` (PENDING/FINALIZED/CANCELLED), `created_at`, `finalized_at` | composite FKs: concept must belong to the project, revision must belong to the concept; one non-cancelled design per project |
+| `final_views` | `id`, `project_id`→projects (cascade), `final_design_id`, `view_type` (FRONT/BACK/LEFT/RIGHT), `version_number`, `is_current`, `image_url`, `drive_file_id`, `status`, `created_at`, `updated_at` | composite FK: design must belong to the project; one current row per (project, view_type); unique (project, view_type, version) |
+| `project_events` | `id` bigint identity, `project_id`→projects (cascade), `event_type` (15 event types), `payload` jsonb object, `created_at` | append-only (UPDATE and direct DELETE rejected; project cascade allowed); indexes (project_id, created_at), (event_type, created_at) |
+| `workflow_status_transitions` | `entity`, `from_status`, `to_status` | reference data read by the transition trigger |
+
+JSONB is used only for `project_events.payload` and `revisions.interpreted_instruction` (structured, schema-less model output). Lists such as key features and materials are `text[]`.
+
+**Added in later steps:** auth tables (Better Auth, with `projects.owner_id`), `jobs` (n8n dispatch, idempotency keys, callback tokens, deadlines) and optionally `usage_ledger`.
 
 ### 5.3 Rules
 
-- **Immutability:** `concept_versions`, `views` versions and `assets` are never updated in place. Refinement and regeneration always insert new rows. This preserves the approval audit trail and lets the client compare versions.
-- **Single active job per (project, type):** enforced by a partial unique index on `jobs (project_id, type) WHERE status IN ('QUEUED','RUNNING')`.
-- **Idempotent callbacks:** each callback carries `jobId` + `eventId`. A processed-event table, or a unique constraint on `(job_id, event_id)`, makes retries from n8n safe.
-- **Timeouts:** jobs past `deadline_at` are marked `TIMED_OUT` by a lightweight sweeper. It is lazy-checked on project reads plus a periodic internal route. Late callbacks for timed-out or superseded jobs are rejected.
-- **Retention:** rejected concepts and old versions are kept for the life of the project. Asset files for deleted projects are removed by an admin cleanup task (out of scope for M1).
+- **History is kept:** a refinement inserts a new `revisions` row; regenerating a view inserts a new `final_views` version and marks the old one non-current. Nothing is overwritten.
+- **Events in the same transaction:** every workflow operation writes its `project_events` row in the transaction that changes state, so the log never disagrees with the data.
+- **Idempotent callbacks / timeouts:** via the `jobs` table (later step). The phase guards already reject writes for a project that has moved on.
+- **Retention:** rejected concepts and old versions are kept for the life of the project. Deleting a project cascades to all of its rows.
 
 ---
 
@@ -481,14 +501,14 @@ The production VPS is a **separate decision** ([D5](#appendix-b--open-decisions)
 | `POST` | `/api/projects` | Create project `{ title, brief, constraints?, conceptCount (2–5) }` and dispatch `concepts.generate` | — |
 | `GET` | `/api/projects` | List own projects | any |
 | `GET` | `/api/projects/:projectId` | Project + concepts (current versions) + view set + active job | any |
-| `POST` | `/api/projects/:projectId/concepts/generate` | Generate more concepts | `CONCEPTS_READY`, `FAILED` |
-| `PATCH` | `/api/concepts/:conceptId` | `{ status: SHORTLISTED \| REJECTED \| PENDING, rejectionReason? }` | `CONCEPTS_READY` |
-| `POST` | `/api/concepts/:conceptId/refine` | `{ instruction, fromVersionId }` and dispatch `concept.refine` | `CONCEPTS_READY` |
+| `POST` | `/api/projects/:projectId/concepts/generate` | Generate more concepts | `CONCEPT_REVIEW`, `FAILED` |
+| `PATCH` | `/api/concepts/:conceptId` | `{ status: SELECTED \| REJECTED \| READY, rejectionReason? }` | `CONCEPT_REVIEW` |
+| `POST` | `/api/concepts/:conceptId/refine` | `{ clientFeedback }` and dispatch `concept.refine` | `CONCEPT_REVIEW` |
 | `GET` | `/api/concepts/:conceptId/versions` | Revision history | any |
-| `POST` | `/api/concepts/:conceptId/finalize` | `{ versionId }`: lock design and dispatch `views.generate` | `CONCEPTS_READY` |
-| `POST` | `/api/projects/:projectId/views/regenerate` | `{ angles: [...], feedback? }` | `VIEWS_READY` |
-| `POST` | `/api/projects/:projectId/views/approve` | Approve the current 4 views and dispatch `drive.export` | `VIEWS_READY` |
-| `POST` | `/api/projects/:projectId/export/retry` | Retry a failed Drive export | `VIEWS_APPROVED` |
+| `POST` | `/api/concepts/:conceptId/finalize` | `{ revisionId? }`: create final design (FINALIZING), then dispatch `views.generate` | `CONCEPT_REVIEW` |
+| `POST` | `/api/projects/:projectId/views/regenerate` | `{ angles: [...], feedback? }` | `VIEW_REVIEW` |
+| `POST` | `/api/projects/:projectId/views/approve` | Approve the current 4 views and dispatch `drive.export` | `VIEW_REVIEW` |
+| `POST` | `/api/projects/:projectId/export/retry` | Retry a failed Drive export | `FAILED` (failed from `UPLOADING_TO_DRIVE`) |
 | `GET` | `/api/jobs/:jobId` | Job status/progress | any |
 | `GET` | `/api/assets/:assetId` | Stream image after an ownership check (`Cache-Control: private`) | any |
 
@@ -916,7 +936,7 @@ These requirements assume "H3D" is a multi-view image-to-3D model such as Tencen
 ### 14.3 Platform readiness
 
 - The same n8n user and Postgres server can host M2 workflows (`[3D Studio] M2 · …` names, same tag, same deploy script). The Drive OAuth credential (with `drive.file`) can read M1 files because the same app created them.
-- The project status enum is extensible. M2 may add statuses after `DELIVERED` (e.g. `MODELING`, `RENDERING`, `PUBLISHED`) without changing M1 states.
+- The project status enum is extensible. M2 may add statuses after `COMPLETED` (e.g. `MODELING`, `RENDERING`, `PUBLISHED`) without changing M1 states.
 - `jobs.type` is an extensible enum. The callback mechanism and the `SUB-0x` sub-workflows are reusable for long-running M2 steps such as 3D generation and rendering.
 - `usage_ledger` already supports per-provider cost tracking, which M2's GPU/3D services will need.
 
@@ -929,7 +949,7 @@ These requirements assume "H3D" is a multi-view image-to-3D model such as Tencen
 | 0 | ✅ Repo moved out of Google Drive + `git init` (done). Confirm open decisions (Appendix B). Instance owner creates the `3d-automation` n8n user and that user creates its API key | Decisions recorded, scoped API key available |
 | 1 | Monorepo scaffold: pnpm workspace, Next.js app, TS strict, ESLint/Prettier, Tailwind + shadcn, Vitest, `.env.example` | `pnpm lint && pnpm typecheck && pnpm test` green |
 | 2 | ✅ Docker Compose: postgres (app + n8n DBs), n8n (pinned, Postgres-backed), web (Next.js skeleton + `/api/health`). Health checks, `scripts/verify-stack.sh`, `docs/DEVELOPMENT.md` (done 2026-10-04 as "Step 1: infrastructure") | `verify-stack.sh --persistence` all green |
-| 3 | DB schema + migrations, Better Auth (invite-only), project CRUD, state machine + tests | Unit and integration tests green |
+| 3 | ✅ DB schema + migrations, workflow state machine (DB-enforced) + services + tests (done 2026-10-04 as "Step 2"). Better Auth moves to a later step | 71 tests green |
 | 4 | `packages/contracts` + job dispatch/callback infrastructure + asset storage + signed URLs + mock n8n stub | Callback integration tests green |
 | 5 | Guarded `n8n-deploy` / `n8n-export` scripts (§6.6–6.7) with `--dry-run` and pre-deploy backup. `[3D Studio]` credentials created in the shared instance under the `3d-automation` user. Sub-workflows `SUB-01..05`, error handler `WF-99` deployed **inactive** | Dry-run reviewed. All pre-existing workflows unchanged (before/after diff of the backup). Our workflows deployed |
 | 6 | `WF-01` concepts + concepts UI (cards, approve/reject, generate more) | Mock E2E part 1 |

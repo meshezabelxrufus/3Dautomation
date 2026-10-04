@@ -106,15 +106,33 @@ services:
       start_period: 30s
     logging: *default-logging
 
+  # One-shot: applies pending database migrations, then exits. `web` waits for it.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: migrator
+    image: three-d-automation/migrate:local
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${APP_DB_NAME}
+    logging: *default-logging
+
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      target: runner
     image: three-d-automation/web:local
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       # Not dependent on n8n on purpose: web must start even if n8n is down or external.
     environment:
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3100}

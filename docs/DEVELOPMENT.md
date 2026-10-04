@@ -20,6 +20,8 @@ Architecture background: [`MILESTONE-1-ARCHITECTURE.md`](./MILESTONE-1-ARCHITECT
 13. [Using an external n8n instead](#13-using-an-external-n8n-instead)
 14. [Data, backups and resets](#14-data-backups-and-resets)
 15. [Troubleshooting](#15-troubleshooting)
+16. [Database schema and migrations](#16-database-schema-and-migrations)
+17. [Running the tests](#17-running-the-tests)
 
 ---
 
@@ -30,6 +32,7 @@ Architecture background: [`MILESTONE-1-ARCHITECTURE.md`](./MILESTONE-1-ARCHITECT
 | `web` | built from `apps/web/Dockerfile` (Next.js 16, standalone) | http://localhost:3100 | `http://web:3000` | `assets_data` → `/data/assets` |
 | `n8n` | `n8nio/n8n:2.32.6` | http://localhost:5680 | `http://n8n:5678` | `n8n_data` → `/home/node/.n8n` |
 | `postgres` | `postgres:16-alpine` | `localhost:5434` | `postgres:5432` | `pg_data` → `/var/lib/postgresql/data` |
+| `migrate` (one-shot) | `migrator` target of `apps/web/Dockerfile` | — | — | — |
 
 - **Postgres** hosts two isolated databases:
   - `app`, owned by `app_user`, for the web app;
@@ -38,6 +41,7 @@ Architecture background: [`MILESTONE-1-ARCHITECTURE.md`](./MILESTONE-1-ARCHITECT
   Neither role can connect to the other's database.
 - **n8n** stores its workflows, credentials and executions in Postgres. It encrypts stored credentials with `N8N_ENCRYPTION_KEY` from `.env`.
 - **Ports** are bound to `127.0.0.1` only. The defaults avoid 3000, 5432 and 5678, which other local stacks commonly use.
+- **`migrate`** applies pending database migrations, then exits. `web` only starts after it succeeds.
 - **Compose project name** is `three-d-automation`, so containers, volumes and the network are prefixed with it and never collide with other stacks.
 
 ## 2. Prerequisites
@@ -301,3 +305,63 @@ Then run `docker compose up -d` again. The databases are re-created by the init 
 | n8n logs a `pg` `DeprecationWarning` about `client.query()` | Comes from n8n's internals. Harmless |
 | `web` is `unhealthy` | `docker compose logs web` and `curl localhost:3100/api/health`. Usually Postgres is not ready or `DATABASE_URL` credentials don't match the initialised database |
 | Docker build fails at `pnpm install --frozen-lockfile` | `pnpm-lock.yaml` is out of date. Run `pnpm install` on the host and commit the lockfile |
+| `migrate` exited with a non-zero code and `web` doesn't start | `docker compose logs migrate`. Usually a migration error or a database connection problem. Fix it, then `docker compose up -d` again |
+
+## 16. Database schema and migrations
+
+| What | Where |
+|---|---|
+| Schema (tables, enums, FKs, indexes) | `apps/web/src/db/schema.ts` (Drizzle ORM) |
+| Workflow statuses, transitions, event types | `apps/web/src/server/domain/workflow-states.ts` |
+| Workflow operations (status change + event in one transaction) | `apps/web/src/server/workflow/` |
+| SQL migrations | `apps/web/drizzle/` (`0000` generated from the schema, `0001` triggers and transition seed) |
+
+Tables: `projects`, `concepts`, `revisions`, `final_designs`, `final_views`, `project_events`, plus the `workflow_status_transitions` reference table. Architecture §4.1 and §5.2 describe the model.
+
+**The database is authoritative for workflow state.** Triggers reject any status change that isn't an allowed transition, as well as cross-step violations (e.g. uploading before all four views are approved), even for raw SQL. Change state through the functions in `src/server/workflow/`, never by writing `status` directly.
+
+Migrations run automatically through the `migrate` service on `docker compose up`. To run them from the host (uses `apps/web/.env.local`, §12):
+
+```bash
+pnpm --filter @three-d/web db:migrate
+```
+
+To change the schema:
+
+1. Edit `apps/web/src/db/schema.ts`.
+2. Generate a migration:
+
+   ```bash
+   pnpm --filter @three-d/web db:generate
+   ```
+
+3. Review the generated SQL in `apps/web/drizzle/`, then apply it with `db:migrate`.
+
+For triggers, functions or data changes, create an empty custom migration and write the SQL by hand:
+
+```bash
+pnpm --filter @three-d/web exec drizzle-kit generate --custom --name <name>
+```
+
+**Changing a state transition** needs both an edit to `workflow-states.ts` and a new migration that updates `workflow_status_transitions`. The test `tests/db/state-machine-sync.test.ts` fails if the two disagree.
+
+Never edit a migration that has already been applied anywhere. Add a new one instead.
+
+## 17. Running the tests
+
+The tests need the Postgres container running (`docker compose up -d postgres`). Each run creates a temporary database (`app_test_<random>`), applies the real migrations as `app_user`, runs the tests and drops the database afterwards. Your development data is never touched. Connection details come from the root `.env`.
+
+```bash
+pnpm --filter @three-d/web test
+```
+
+| Test file | Covers |
+|---|---|
+| `tests/domain/workflow-states.test.ts` | Pure state-machine rules |
+| `tests/db/migrations.test.ts` | Tables, triggers, indexes, re-running migrations |
+| `tests/db/state-machine-sync.test.ts` | TypeScript transitions and enums equal the database |
+| `tests/db/crud.test.ts` | Create/read/update/delete for every table, column checks |
+| `tests/db/foreign-keys.test.ts` | FK rejections, cross-project FKs, cascades |
+| `tests/db/state-transitions.test.ts` | Invalid transitions and guards, via raw SQL and via services |
+| `tests/workflow/lifecycle.test.ts` | Full brief → COMPLETED lifecycle with the exact event sequence, failure and retry paths |
+

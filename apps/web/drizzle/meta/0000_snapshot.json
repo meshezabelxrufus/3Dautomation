@@ -1,0 +1,1108 @@
+{
+  "id": "7e25b3bc-4dc2-44a6-a765-60421137ef5d",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.concepts": {
+      "name": "concepts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "concept_number": {
+          "name": "concept_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "creative_direction": {
+          "name": "creative_direction",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "key_features": {
+          "name": "key_features",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "materials": {
+          "name": "materials",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "generation_prompt": {
+          "name": "generation_prompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "image_url": {
+          "name": "image_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "concept_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'GENERATING'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "concepts_project_status_idx": {
+          "name": "concepts_project_status_idx",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "concepts_project_id_projects_id_fk": {
+          "name": "concepts_project_id_projects_id_fk",
+          "tableFrom": "concepts",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "concepts_project_concept_number_key": {
+          "name": "concepts_project_concept_number_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "project_id",
+            "concept_number"
+          ]
+        },
+        "concepts_id_project_key": {
+          "name": "concepts_id_project_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "project_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "concepts_concept_number_positive": {
+          "name": "concepts_concept_number_positive",
+          "value": "\"concepts\".\"concept_number\" >= 1"
+        },
+        "concepts_image_required": {
+          "name": "concepts_image_required",
+          "value": "\"concepts\".\"status\" in ('GENERATING', 'FAILED') or \"concepts\".\"image_url\" is not null"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.final_designs": {
+      "name": "final_designs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approved_concept_id": {
+          "name": "approved_concept_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approved_revision_id": {
+          "name": "approved_revision_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "master_image": {
+          "name": "master_image",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "final_design_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "finalized_at": {
+          "name": "finalized_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "final_designs_one_active_per_project": {
+          "name": "final_designs_one_active_per_project",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"final_designs\".\"status\" <> 'CANCELLED'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "final_designs_approved_concept_idx": {
+          "name": "final_designs_approved_concept_idx",
+          "columns": [
+            {
+              "expression": "approved_concept_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "final_designs_approved_revision_idx": {
+          "name": "final_designs_approved_revision_idx",
+          "columns": [
+            {
+              "expression": "approved_revision_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "final_designs_project_id_projects_id_fk": {
+          "name": "final_designs_project_id_projects_id_fk",
+          "tableFrom": "final_designs",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "final_designs_concept_same_project_fk": {
+          "name": "final_designs_concept_same_project_fk",
+          "tableFrom": "final_designs",
+          "tableTo": "concepts",
+          "columnsFrom": [
+            "approved_concept_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "final_designs_revision_same_concept_fk": {
+          "name": "final_designs_revision_same_concept_fk",
+          "tableFrom": "final_designs",
+          "tableTo": "revisions",
+          "columnsFrom": [
+            "approved_revision_id",
+            "approved_concept_id"
+          ],
+          "columnsTo": [
+            "id",
+            "concept_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "final_designs_id_project_key": {
+          "name": "final_designs_id_project_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "project_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "final_designs_finalized_at_consistent": {
+          "name": "final_designs_finalized_at_consistent",
+          "value": "(\"final_designs\".\"status\" = 'FINALIZED') = (\"final_designs\".\"finalized_at\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.final_views": {
+      "name": "final_views",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "final_design_id": {
+          "name": "final_design_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "view_type": {
+          "name": "view_type",
+          "type": "view_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version_number": {
+          "name": "version_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "is_current": {
+          "name": "is_current",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "image_url": {
+          "name": "image_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "drive_file_id": {
+          "name": "drive_file_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "view_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'GENERATING'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "final_views_one_current_per_type": {
+          "name": "final_views_one_current_per_type",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "view_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"final_views\".\"is_current\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "final_views_project_status_idx": {
+          "name": "final_views_project_status_idx",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "final_views_final_design_idx": {
+          "name": "final_views_final_design_idx",
+          "columns": [
+            {
+              "expression": "final_design_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "final_views_project_id_projects_id_fk": {
+          "name": "final_views_project_id_projects_id_fk",
+          "tableFrom": "final_views",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "final_views_design_same_project_fk": {
+          "name": "final_views_design_same_project_fk",
+          "tableFrom": "final_views",
+          "tableTo": "final_designs",
+          "columnsFrom": [
+            "final_design_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "final_views_project_type_version_key": {
+          "name": "final_views_project_type_version_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "project_id",
+            "view_type",
+            "version_number"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "final_views_version_positive": {
+          "name": "final_views_version_positive",
+          "value": "\"final_views\".\"version_number\" >= 1"
+        },
+        "final_views_image_required": {
+          "name": "final_views_image_required",
+          "value": "\"final_views\".\"status\" in ('GENERATING', 'FAILED') or \"final_views\".\"image_url\" is not null"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.project_events": {
+      "name": "project_events",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "project_events_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "project_event_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "project_events_project_created_idx": {
+          "name": "project_events_project_created_idx",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "project_events_type_created_idx": {
+          "name": "project_events_type_created_idx",
+          "columns": [
+            {
+              "expression": "event_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_events_project_id_projects_id_fk": {
+          "name": "project_events_project_id_projects_id_fk",
+          "tableFrom": "project_events",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "project_events_payload_object": {
+          "name": "project_events_payload_object",
+          "value": "jsonb_typeof(\"project_events\".\"payload\") = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.projects": {
+      "name": "projects",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "project_name": {
+          "name": "project_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_name": {
+          "name": "client_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "design_brief": {
+          "name": "design_brief",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "project_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'DRAFT'"
+        },
+        "failed_from_status": {
+          "name": "failed_from_status",
+          "type": "project_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_reason": {
+          "name": "failure_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "finalized_at": {
+          "name": "finalized_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "projects_status_updated_at_idx": {
+          "name": "projects_status_updated_at_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "projects_created_at_idx": {
+          "name": "projects_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "projects_client_name_idx": {
+          "name": "projects_client_name_idx",
+          "columns": [
+            {
+              "expression": "client_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "projects_project_name_len": {
+          "name": "projects_project_name_len",
+          "value": "char_length(\"projects\".\"project_name\") between 1 and 200"
+        },
+        "projects_client_name_len": {
+          "name": "projects_client_name_len",
+          "value": "char_length(\"projects\".\"client_name\") between 1 and 200"
+        },
+        "projects_design_brief_len": {
+          "name": "projects_design_brief_len",
+          "value": "char_length(\"projects\".\"design_brief\") between 1 and 4000"
+        },
+        "projects_failed_from_status_consistent": {
+          "name": "projects_failed_from_status_consistent",
+          "value": "(\"projects\".\"status\" = 'FAILED') = (\"projects\".\"failed_from_status\" is not null)"
+        },
+        "projects_finalized_at_consistent": {
+          "name": "projects_finalized_at_consistent",
+          "value": "(\"projects\".\"status\" = 'COMPLETED') = (\"projects\".\"finalized_at\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.revisions": {
+      "name": "revisions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "concept_id": {
+          "name": "concept_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_number": {
+          "name": "revision_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_feedback": {
+          "name": "client_feedback",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "interpreted_instruction": {
+          "name": "interpreted_instruction",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "generation_prompt": {
+          "name": "generation_prompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "image_url": {
+          "name": "image_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "revision_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'GENERATING'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "revisions_one_generating_per_concept": {
+          "name": "revisions_one_generating_per_concept",
+          "columns": [
+            {
+              "expression": "concept_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"revisions\".\"status\" = 'GENERATING'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "revisions_one_selected_per_concept": {
+          "name": "revisions_one_selected_per_concept",
+          "columns": [
+            {
+              "expression": "concept_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"revisions\".\"status\" = 'SELECTED'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "revisions_concept_id_concepts_id_fk": {
+          "name": "revisions_concept_id_concepts_id_fk",
+          "tableFrom": "revisions",
+          "tableTo": "concepts",
+          "columnsFrom": [
+            "concept_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "revisions_concept_revision_number_key": {
+          "name": "revisions_concept_revision_number_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "concept_id",
+            "revision_number"
+          ]
+        },
+        "revisions_id_concept_key": {
+          "name": "revisions_id_concept_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "concept_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "revisions_revision_number_positive": {
+          "name": "revisions_revision_number_positive",
+          "value": "\"revisions\".\"revision_number\" >= 1"
+        },
+        "revisions_client_feedback_len": {
+          "name": "revisions_client_feedback_len",
+          "value": "char_length(\"revisions\".\"client_feedback\") between 1 and 1000"
+        },
+        "revisions_image_required": {
+          "name": "revisions_image_required",
+          "value": "\"revisions\".\"status\" in ('GENERATING', 'FAILED') or \"revisions\".\"image_url\" is not null"
+        },
+        "revisions_interpreted_instruction_object": {
+          "name": "revisions_interpreted_instruction_object",
+          "value": "\"revisions\".\"interpreted_instruction\" is null or jsonb_typeof(\"revisions\".\"interpreted_instruction\") = 'object'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.workflow_status_transitions": {
+      "name": "workflow_status_transitions",
+      "schema": "",
+      "columns": {
+        "entity": {
+          "name": "entity",
+          "type": "workflow_entity",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_status": {
+          "name": "from_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "to_status": {
+          "name": "to_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "workflow_status_transitions_entity_from_status_to_status_pk": {
+          "name": "workflow_status_transitions_entity_from_status_to_status_pk",
+          "columns": [
+            "entity",
+            "from_status",
+            "to_status"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.concept_status": {
+      "name": "concept_status",
+      "schema": "public",
+      "values": [
+        "GENERATING",
+        "READY",
+        "SELECTED",
+        "REJECTED",
+        "REFINING",
+        "FINAL",
+        "FAILED"
+      ]
+    },
+    "public.final_design_status": {
+      "name": "final_design_status",
+      "schema": "public",
+      "values": [
+        "PENDING",
+        "FINALIZED",
+        "CANCELLED"
+      ]
+    },
+    "public.project_event_type": {
+      "name": "project_event_type",
+      "schema": "public",
+      "values": [
+        "PROJECT_CREATED",
+        "CONCEPT_GENERATION_STARTED",
+        "CONCEPT_GENERATION_COMPLETED",
+        "CONCEPT_SELECTED",
+        "CONCEPT_REJECTED",
+        "REFINEMENT_STARTED",
+        "REVISION_CREATED",
+        "DESIGN_FINALIZED",
+        "VIEW_GENERATION_STARTED",
+        "VIEW_GENERATED",
+        "VIEW_APPROVED",
+        "DRIVE_UPLOAD_STARTED",
+        "DRIVE_UPLOAD_COMPLETED",
+        "PROJECT_COMPLETED",
+        "GENERATION_FAILED"
+      ]
+    },
+    "public.project_status": {
+      "name": "project_status",
+      "schema": "public",
+      "values": [
+        "DRAFT",
+        "GENERATING_CONCEPTS",
+        "CONCEPT_REVIEW",
+        "REFINING",
+        "FINALIZING",
+        "GENERATING_VIEWS",
+        "VIEW_REVIEW",
+        "UPLOADING_TO_DRIVE",
+        "COMPLETED",
+        "FAILED"
+      ]
+    },
+    "public.revision_status": {
+      "name": "revision_status",
+      "schema": "public",
+      "values": [
+        "GENERATING",
+        "READY",
+        "SELECTED",
+        "FAILED"
+      ]
+    },
+    "public.view_status": {
+      "name": "view_status",
+      "schema": "public",
+      "values": [
+        "GENERATING",
+        "READY",
+        "APPROVED",
+        "FAILED"
+      ]
+    },
+    "public.view_type": {
+      "name": "view_type",
+      "schema": "public",
+      "values": [
+        "FRONT",
+        "BACK",
+        "LEFT",
+        "RIGHT"
+      ]
+    },
+    "public.workflow_entity": {
+      "name": "workflow_entity",
+      "schema": "public",
+      "values": [
+        "project",
+        "concept",
+        "revision",
+        "final_design",
+        "final_view"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

@@ -7,9 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file-if-exists=.env.local src/db/migrate.ts"
   },
   "dependencies": {
+    "drizzle-orm": "0.45.3",
     "next": "16.3.8",
     "pg": "^8",
     "react": "19.2.8",
@@ -22,9 +27,12 @@
     "@types/pg": "^8",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "drizzle-kit": "0.31.11",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "vitest": "5.0.3"
   }
 }

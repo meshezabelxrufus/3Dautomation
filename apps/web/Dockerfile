@@ -18,6 +18,13 @@ COPY apps/web/package.json apps/web/
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --filter @three-d/web...
 
+# ---- migrator: one-shot schema migrations (docker compose service "migrate") ----
+FROM deps AS migrator
+COPY apps/web apps/web
+WORKDIR /repo/apps/web
+USER node
+CMD ["./node_modules/.bin/tsx", "src/db/migrate.ts"]
+
 # ---- build: Next.js standalone output ----
 FROM deps AS build
 COPY apps/web apps/web

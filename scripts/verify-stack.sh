@@ -66,6 +66,14 @@ run_checks() {
   fi
   check "postgres reachable from host on 127.0.0.1:${POSTGRES_HOST_PORT:-5434}" nc -z 127.0.0.1 "${POSTGRES_HOST_PORT:-5434}"
 
+  echo "== Schema"
+  mid=$(docker compose ps -a -q migrate 2>/dev/null || true)
+  if [ -n "$mid" ] && [ "$(docker inspect -f '{{.State.ExitCode}}' "$mid" 2>/dev/null)" = "0" ]; then pass "migrate service completed (exit 0)"; else fail "migrate service completed (exit 0)"; fi
+  tables=$(psql_as "$APP_DB_USER" "$APP_DB_PASSWORD" "$APP_DB_NAME" "select count(*) from information_schema.tables where table_schema='public' and table_name in ('projects','concepts','revisions','final_designs','final_views','project_events','workflow_status_transitions')" 2>/dev/null || echo 0)
+  if [ "$tables" = 7 ]; then pass "workflow tables present (7/7)"; else fail "workflow tables present ($tables/7)"; fi
+  transitions=$(psql_as "$APP_DB_USER" "$APP_DB_PASSWORD" "$APP_DB_NAME" "select count(*) from workflow_status_transitions" 2>/dev/null || echo 0)
+  if [ "${transitions:-0}" -gt 0 ]; then pass "state transitions seeded ($transitions)"; else fail "state transitions seeded"; fi
+
   if [ "$N8N_ENABLED" = 1 ]; then
     echo "== n8n"
     check "GET $N8N_URL/healthz" curl -fsS -o /dev/null "$N8N_URL/healthz"
