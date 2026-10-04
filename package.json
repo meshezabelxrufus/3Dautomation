@@ -1,0 +1,20 @@
+{
+  "name": "the-3d-automation",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @three-d/web dev",
+    "build": "pnpm --filter @three-d/web build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "env:init": "sh scripts/init-env.sh",
+    "stack:up": "docker compose up -d --build",
+    "stack:down": "docker compose down",
+    "stack:ps": "docker compose ps",
+    "stack:logs": "docker compose logs -f --tail=100",
+    "stack:verify": "sh scripts/verify-stack.sh"
+  }
+}

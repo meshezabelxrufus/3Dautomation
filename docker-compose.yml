@@ -1,0 +1,136 @@
+# 3D Design Studio — local development / single-host stack.
+# See docs/DEVELOPMENT.md for usage and docs/MILESTONE-1-ARCHITECTURE.md §11 for the design.
+#
+# Services:
+#   postgres  always    app + n8n databases (named volume pg_data)
+#   n8n       profile   "n8n" — project-owned n8n (named volume n8n_data). Enabled by default via
+#                       COMPOSE_PROFILES=n8n in .env. Disable it to use an external n8n instead.
+#   web       always    Next.js UI + backend-for-frontend (named volume assets_data)
+#
+# All data lives in named volumes: `docker compose down` keeps it, `docker compose down -v` DELETES it.
+
+name: three-d-automation
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: postgres
+      # Consumed by infra/postgres/init/01-create-databases.sh on first init only.
+      APP_DB_NAME: ${APP_DB_NAME:?set APP_DB_NAME in .env}
+      APP_DB_USER: ${APP_DB_USER:?set APP_DB_USER in .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
+      N8N_DB_NAME: ${N8N_DB_NAME:?set N8N_DB_NAME in .env}
+      N8N_DB_USER: ${N8N_DB_USER:?set N8N_DB_USER in .env}
+      N8N_DB_PASSWORD: ${N8N_DB_PASSWORD:?set N8N_DB_PASSWORD in .env}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Host access for psql / GUI clients. Localhost only.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    logging: *default-logging
+
+  n8n:
+    image: n8nio/n8n:2.32.6
+    profiles: ["n8n"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # --- Database (Postgres, own database + role) ---
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME}
+      DB_POSTGRESDB_USER: ${N8N_DB_USER}
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD}
+      # --- Encryption of stored credentials. Must never change for an existing instance. ---
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env (run scripts/init-env.sh)}
+      # --- URLs ---
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_EDITOR_BASE_URL: http://localhost:${N8N_HOST_PORT:-5680}
+      N8N_WEBHOOK_URL: http://localhost:${N8N_HOST_PORT:-5680}/
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE:-false}
+      # --- Time ---
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-UTC}
+      TZ: ${GENERIC_TIMEZONE:-UTC}
+      # --- Hardening / privacy ---
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      N8N_COMMUNITY_PACKAGES_ENABLED: "false"
+      N8N_UNVERIFIED_PACKAGES_ENABLED: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      # --- Code node task runners: JavaScript only. The image ships no Python, so n8n logs a
+      #     harmless "Failed to start Python task runner" warning at startup. ---
+      N8N_PYTHON_ENABLED: "false"
+      N8N_RUNNERS_TASK_TIMEOUT: "300"
+      # Compression node limits pinned to n8n's announced future defaults.
+      N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES: "268435456"
+      N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES: "1000"
+      # --- Executions & binary data ---
+      N8N_DEFAULT_BINARY_DATA_MODE: filesystem
+      N8N_PAYLOAD_SIZE_MAX: ${N8N_PAYLOAD_SIZE_MAX:-64}
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: ${EXECUTIONS_DATA_MAX_AGE:-336}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    ports:
+      # Editor + webhooks for the host. Localhost only.
+      - "127.0.0.1:${N8N_HOST_PORT:-5680}:5678"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5678/healthz/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    logging: *default-logging
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: three-d-automation/web:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Not dependent on n8n on purpose: web must start even if n8n is down or external.
+    environment:
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3100}
+      DATABASE_URL: postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${APP_DB_NAME}
+      # Project n8n (in this stack) by default. For an external n8n use e.g. http://host.docker.internal:5678
+      N8N_WEBHOOK_BASE_URL: ${N8N_WEBHOOK_BASE_URL:-http://n8n:5678}
+      ASSET_STORAGE_DIR: /data/assets
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - assets_data:/data/assets
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-3100}:3000"
+    logging: *default-logging
+
+volumes:
+  pg_data:
+  n8n_data:
+  assets_data:
