@@ -1,0 +1,25 @@
+# dependencies & builds
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# n8n per-environment state & backups
+n8n/state/
+n8n/backups/
+
+# test output
+playwright-report/
+test-results/
+
+# OS
+.DS_Store
+
+# Local, machine-specific notes (never published)
+docs/local/
