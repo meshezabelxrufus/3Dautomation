@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs>
+<radialGradient id="bg" cx="50%" cy="38%" r="75%"><stop offset="0" stop-color="hsl(38 14% 96%)"/><stop offset="1" stop-color="hsl(38 10% 82%)"/></radialGradient>
+<radialGradient id="shadow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#000" stop-opacity="0.28"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#bg)"/>
+<ellipse cx="512" cy="842" rx="300" ry="46" fill="url(#shadow)"/>
+<path d="M352 800 L672 800 L640 842 L384 842 Z" fill="hsl(38 6% 30%)"/><rect x="392" y="760" width="240" height="44" rx="6" fill="hsl(38 6% 38%)"/>
+<ellipse cx="512" cy="520" rx="250" ry="95" fill="none" stroke="hsl(38 30% 40%)" stroke-width="22"/>
+<circle cx="512" cy="520" r="150" fill="hsl(38 36% 52%)"/><circle cx="470" cy="470" r="60" fill="hsl(38 40% 72%)" opacity="0.55"/>
+<path d="M262 520 A250 95 0 0 0 762 520" fill="none" stroke="hsl(38 34% 30%)" stroke-width="22"/>
+<rect x="500" y="670" width="24" height="90" fill="hsl(38 10% 40%)"/>
+<text x="512" y="980" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="22" letter-spacing="3" fill="hsl(38 8% 45%)">DEMO RENDER · CONCEPT 01</text>
+</svg>

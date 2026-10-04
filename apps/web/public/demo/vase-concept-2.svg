@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs>
+<radialGradient id="bg" cx="50%" cy="38%" r="75%"><stop offset="0" stop-color="hsl(330 14% 96%)"/><stop offset="1" stop-color="hsl(330 10% 82%)"/></radialGradient>
+<radialGradient id="shadow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#000" stop-opacity="0.28"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#bg)"/>
+<ellipse cx="512" cy="842" rx="300" ry="46" fill="url(#shadow)"/>
+<path d="M352 800 L672 800 L640 842 L384 842 Z" fill="hsl(330 6% 30%)"/><rect x="392" y="760" width="240" height="44" rx="6" fill="hsl(330 6% 38%)"/><polygon points="512.0,520.0 701.8,669.3 528.8,783.8" fill="hsl(330 40% 35%)" stroke="hsl(330 40% 45%)" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="512.0,520.0 528.8,783.8 343.1,699.6" fill="hsl(330 40% 45%)" stroke="hsl(330 40% 55%)" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="512.0,520.0 343.1,699.6 284.6,480.2" fill="hsl(330 40% 64%)" stroke="hsl(330 40% 74%)" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="512.0,520.0 284.6,480.2 397.3,290.7" fill="hsl(330 40% 78%)" stroke="hsl(330 40% 88%)" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="512.0,520.0 397.3,290.7 596.4,273.9" fill="hsl(330 40% 73%)" stroke="hsl(330 40% 83%)" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="512.0,520.0 596.4,273.9 731.9,442.4" fill="hsl(330 40% 58%)" stroke="hsl(330 40% 68%)" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="512.0,520.0 731.9,442.4 701.8,669.3" fill="hsl(330 40% 39%)" stroke="hsl(330 40% 49%)" stroke-width="1.5" stroke-linejoin="round"/>
+<text x="512" y="980" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="22" letter-spacing="3" fill="hsl(330 8% 45%)">DEMO RENDER · CONCEPT 02</text>
+</svg>

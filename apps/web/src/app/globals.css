@@ -1,26 +1,316 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * 3D Design Studio: design tokens.
+ * Principles (apple-design skill): system type with size-specific tracking, restraint,
+ * hairline structure instead of heavy shadows, one accent, colors that adapt to light/dark,
+ * instant press feedback, translucent chrome, reduced-motion/transparency/contrast support.
+ */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+:root {
+  color-scheme: light dark;
+
+  --canvas: #f5f5f7;
+  --surface: #ffffff;
+  --surface-2: #fbfbfd;
+  --sunken: #ececf0;
+  --ink: #1d1d1f;
+  --ink-2: #515154;
+  --ink-3: #86868b;
+  --hairline: rgb(0 0 0 / 0.08);
+  --hairline-strong: rgb(0 0 0 / 0.14);
+  --accent: #0071e3;
+  --accent-ink: #ffffff;
+  --accent-soft: rgb(0 113 227 / 0.1);
+  --success: #1d8a3a;
+  --success-soft: rgb(29 138 58 / 0.1);
+  --attention: #b25000;
+  --attention-soft: rgb(178 80 0 / 0.1);
+  --danger: #d70015;
+  --danger-soft: rgb(215 0 21 / 0.08);
+  --scrim: rgb(0 0 0 / 0.32);
+  --material: rgb(245 245 247 / 0.72);
+  --material-edge: rgb(255 255 255 / 0.5);
+  --shadow-float: 0 1px 2px rgb(0 0 0 / 0.04), 0 12px 32px -12px rgb(0 0 0 / 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --canvas: #000000;
+    --surface: #161617;
+    --surface-2: #1c1c1e;
+    --sunken: #0e0e0f;
+    --ink: #f5f5f7;
+    --ink-2: #c7c7cc;
+    --ink-3: #8e8e93;
+    --hairline: rgb(255 255 255 / 0.1);
+    --hairline-strong: rgb(255 255 255 / 0.18);
+    --accent: #2997ff;
+    --accent-ink: #000000;
+    --accent-soft: rgb(41 151 255 / 0.16);
+    --success: #30d158;
+    --success-soft: rgb(48 209 88 / 0.14);
+    --attention: #ff9f0a;
+    --attention-soft: rgb(255 159 10 / 0.14);
+    --danger: #ff453a;
+    --danger-soft: rgb(255 69 58 / 0.14);
+    --scrim: rgb(0 0 0 / 0.56);
+    --material: rgb(22 22 23 / 0.72);
+    --material-edge: rgb(255 255 255 / 0.08);
+    --shadow-float: 0 1px 2px rgb(0 0 0 / 0.4), 0 16px 40px -12px rgb(0 0 0 / 0.7);
   }
 }
 
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-sunken: var(--sunken);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-attention: var(--attention);
+  --color-attention-soft: var(--attention-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-scrim: var(--scrim);
+  --shadow-float: var(--shadow-float);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
+    "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+
+  --radius-card: 1.25rem;
+  --radius-image: 1rem;
+}
+
+html {
+  /* Respect the user's text size: everything below is in rem/em. */
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--canvas);
+  color: var(--ink);
   font-family: var(--font-sans);
+  font-optical-sizing: auto;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- Type scale: tracking and leading change with size ---- */
+@utility text-display {
+  font-size: clamp(2.25rem, 1.6rem + 2.6vw, 3.75rem);
+  line-height: 1.04;
+  letter-spacing: -0.028em;
+  font-weight: 650;
+}
+@utility text-title {
+  font-size: clamp(1.625rem, 1.35rem + 1.1vw, 2.25rem);
+  line-height: 1.1;
+  letter-spacing: -0.022em;
+  font-weight: 650;
+}
+@utility text-headline {
+  font-size: 1.1875rem;
+  line-height: 1.25;
+  letter-spacing: -0.012em;
+  font-weight: 600;
+}
+@utility text-body {
+  font-size: 1rem;
+  line-height: 1.55;
+  letter-spacing: -0.003em;
+}
+@utility text-callout {
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  letter-spacing: 0;
+}
+@utility text-caption {
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  letter-spacing: 0.006em;
+}
+@utility text-eyebrow {
+  font-size: 0.75rem;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* ---- Instant press feedback (on pointer-down, not on release) ---- */
+@utility pressable {
+  transition:
+    transform 100ms ease-out,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  &:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.97);
+  }
+}
+
+/* ---- Translucent material for floating chrome (content scrolls underneath) ---- */
+@utility material {
+  background: var(--material);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+
+/* ---- Glass (the welcome stage is always a dark studio scene) ----
+ * Thicker material for bigger surfaces; a bright top edge reads as light catching the
+ * material; never stacked light-on-light. Solid fallbacks below for reduced transparency.
+ */
+@utility glass {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.11), rgb(255 255 255 / 0.035) 60%);
+  backdrop-filter: blur(30px) saturate(170%);
+  -webkit-backdrop-filter: blur(30px) saturate(170%);
+  border: 1px solid rgb(255 255 255 / 0.09);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.22),
+    inset 0 -1px 0 rgb(255 255 255 / 0.03),
+    0 40px 80px -40px rgb(0 0 0 / 0.9);
+}
+@utility glass-thin {
+  background: rgb(255 255 255 / 0.06);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 16px 32px -20px rgb(0 0 0 / 0.8);
+}
+
+/* Fine film grain so glass and light read as physical, not flat CG. */
+@utility grain {
+  position: relative;
+  isolation: isolate;
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0.07;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+}
+
+/* Materialize: glass arrives as a material (blur + scale + opacity together), not a plain fade.
+ * CSS, not JS: content is visible even before hydration. Ease-out matches a critically damped spring. */
+@keyframes materialize {
+  from {
+    opacity: 0;
+    transform: scale(0.965);
+    filter: blur(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+@utility animate-materialize {
+  animation: materialize 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Gyroscope rings: long periods (40–90 s), never near the 5 s range that causes discomfort. */
+@keyframes spin-x {
+  to {
+    transform: rotateX(360deg);
+  }
+}
+@keyframes spin-y {
+  to {
+    transform: rotateY(360deg);
+  }
+}
+@keyframes spin-z {
+  to {
+    transform: rotateZ(360deg);
+  }
+}
+
+/* ---- Loading shimmer ---- */
+@utility shimmer {
+  background: linear-gradient(100deg, var(--sunken) 30%, var(--surface-2) 50%, var(--sunken) 70%);
+  background-size: 300% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* ---- Accessibility preferences ---- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+  .pressable:active {
+    transform: none !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material {
+    background: var(--canvas);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .glass,
+  .glass-thin {
+    background: #1c1c1e;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --hairline: rgb(0 0 0 / 0.35);
+    --hairline-strong: rgb(0 0 0 / 0.55);
+    --ink-3: #5c5c60;
+  }
+  .material {
+    background: var(--canvas);
+    backdrop-filter: none;
+  }
+  .glass,
+  .glass-thin {
+    border-color: rgb(255 255 255 / 0.45);
+  }
 }

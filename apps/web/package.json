@@ -11,15 +11,21 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx --env-file-if-exists=.env.local src/db/migrate.ts"
+    "db:migrate": "tsx --env-file-if-exists=.env.local src/db/migrate.ts",
+    "db:seed:demo": "tsx --env-file-if-exists=.env.local src/db/seed-demo.ts"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@tanstack/react-query": "^5.104.1",
     "drizzle-orm": "0.45.3",
+    "lucide-react": "^1.52.0",
+    "motion": "^14.0.0",
     "next": "16.3.8",
     "pg": "^8",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

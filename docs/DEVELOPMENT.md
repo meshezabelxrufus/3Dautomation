@@ -22,6 +22,7 @@ Architecture background: [`MILESTONE-1-ARCHITECTURE.md`](./MILESTONE-1-ARCHITECT
 15. [Troubleshooting](#15-troubleshooting)
 16. [Database schema and migrations](#16-database-schema-and-migrations)
 17. [Running the tests](#17-running-the-tests)
+18. [Frontend](#18-frontend)
 
 ---
 
@@ -364,4 +365,63 @@ pnpm --filter @three-d/web test
 | `tests/db/foreign-keys.test.ts` | FK rejections, cross-project FKs, cascades |
 | `tests/db/state-transitions.test.ts` | Invalid transitions and guards, via raw SQL and via services |
 | `tests/workflow/lifecycle.test.ts` | Full brief → COMPLETED lifecycle with the exact event sequence, failure and retry paths |
+
+## 18. Frontend
+
+**Screens**
+
+| URL | Screen |
+|---|---|
+| `/projects` | All projects: cover render, client, status, last update, stage progress |
+| `/projects/new` | Create a project: name, client, natural-language brief, number of ideas, **Generate ideas** |
+| `/projects/<id>` | Workspace. Shows the right view for each state: empty, generating, concepts ready, refining, finalizing, generating views, view review, uploading, completed, error |
+| `/projects/<id>?concept=<id>` | One concept up close: large render, details, refine, history, approve as final design |
+
+**Demo data.** To see every workspace state without AI, load nine demo projects (dev only; replaces previous demo projects, leaves everything else alone):
+
+```bash
+pnpm --filter @three-d/web db:seed:demo
+```
+
+Demo projects have " · Demo" after the client name and use placeholder renders from `apps/web/public/demo/`.
+
+**Asynchronous by design.** AI steps take minutes, so the browser never waits on them:
+
+1. A button calls a Server Action (`src/app/projects/actions.ts`). It changes state in the database and returns at once. Dispatching the n8n job will be added in `src/server/commands/projects.ts`.
+2. The workspace polls `GET /api/projects/<id>/status`: every 2.5 s while the project is busy, every 20 s otherwise, and not at all in a background tab.
+3. When the status's `changeToken` changes (for example, a concept image arrived), the workspace refetches project, concepts, revisions and views.
+
+Everything shown comes from the database status, not from browser flags.
+
+**Read API** (JSON, used by the polling hooks and available to other clients):
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/projects` | Project summaries |
+| `POST /api/projects` | Create + start generation (validated; 422 with field messages) |
+| `GET /api/projects/<id>` | Project |
+| `GET /api/projects/<id>/status` | Status, busy flag, change token (for polling) |
+| `GET /api/projects/<id>/concepts` | Concepts |
+| `GET /api/projects/<id>/revisions` | Revisions of all concepts |
+| `GET /api/projects/<id>/views` | Final design + current four views |
+
+**Code map**
+
+| Path | Contents |
+|---|---|
+| `src/components/studio/` | Product components: `ProjectCard`, `ProjectStatus`, `DesignBriefForm`, `ConceptCard`, `ConceptGallery`, `RevisionHistory`, `RefinementInput`, `FinalViewGrid`, `GenerationStatus`, `ErrorState`, `LoadingState`, `ApprovalDialog`, plus the workspace parts |
+| `src/components/ui/` | Primitives: `Button`, `DesignImage`, `Field`, `Skeleton`, `Spinner` |
+| `src/lib/api/` | DTO types, typed fetchers, TanStack Query hooks |
+| `src/lib/workflow-ui.ts` | Labels, tones, stages and busy flags per status |
+| `src/server/queries/` | Read models behind the pages and the GET API |
+| `src/app/globals.css` | Design tokens (light/dark), type scale, materials, accessibility preferences |
+
+**Design system.** It follows the project's `apple-design` skill (`.claude/skills/apple-design`):
+- the system font with size-specific tracking;
+- hairline structure instead of heavy shadows, and one accent colour;
+- instant press feedback;
+- critically damped springs (Motion) for the dialog and gallery entrances;
+- a translucent header.
+
+It respects reduced-motion, reduced-transparency and increased-contrast settings, and works from phone width up.
 

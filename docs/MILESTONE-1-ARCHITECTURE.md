@@ -952,7 +952,7 @@ These requirements assume "H3D" is a multi-view image-to-3D model such as Tencen
 | 3 | ✅ DB schema + migrations, workflow state machine (DB-enforced) + services + tests (done 2026-10-04 as "Step 2"). Better Auth moves to a later step | 71 tests green |
 | 4 | `packages/contracts` + job dispatch/callback infrastructure + asset storage + signed URLs + mock n8n stub | Callback integration tests green |
 | 5 | Guarded `n8n-deploy` / `n8n-export` scripts (§6.6–6.7) with `--dry-run` and pre-deploy backup. `[3D Studio]` credentials created in the shared instance under the `3d-automation` user. Sub-workflows `SUB-01..05`, error handler `WF-99` deployed **inactive** | Dry-run reviewed. All pre-existing workflows unchanged (before/after diff of the backup). Our workflows deployed |
-| 6 | `WF-01` concepts + concepts UI (cards, approve/reject, generate more) | Mock E2E part 1 |
+| 6 | `WF-01` concepts + concepts UI (cards, approve/reject, generate more) | Mock E2E part 1. **UI done 2026-10-04 ("Step 3")**: screens, workspace states, read API, polling, Server Actions; n8n dispatch pending |
 | 7 | `WF-02` refinement + version history UI | Mock E2E part 2 |
 | 8 | `WF-03` four views + views review/regenerate/approve UI | Mock E2E part 3; live multi-view consistency spike |
 | 9 | `WF-04` Drive export + manifest + delivered UI | Drive structure verified on test folder |

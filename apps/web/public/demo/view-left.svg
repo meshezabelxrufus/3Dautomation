@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs>
+<radialGradient id="bg" cx="50%" cy="38%" r="75%"><stop offset="0" stop-color="hsl(220 14% 96%)"/><stop offset="1" stop-color="hsl(220 10% 82%)"/></radialGradient>
+<radialGradient id="shadow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#000" stop-opacity="0.28"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1024" height="1024" fill="url(#bg)"/>
+<ellipse cx="512" cy="842" rx="300" ry="46" fill="url(#shadow)"/>
+<path d="M352 800 L672 800 L640 842 L384 842 Z" fill="hsl(222 6% 30%)"/><rect x="392" y="760" width="240" height="44" rx="6" fill="hsl(222 6% 38%)"/>
+<polygon points="512,760 380,700 350,560 420,470 512,440 604,470 674,560 644,700" fill="hsl(222 34% 46%)" stroke="hsl(222 34% 58%)" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="420,470 392,204 470,440" fill="hsl(222 34% 58%)" stroke="hsl(222 34% 70%)" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="604,470 632,204 554,440" fill="hsl(222 34% 40%)" stroke="hsl(222 34% 52%)" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="512,440 470,440 420,470 456,560 512,600" fill="hsl(222 34% 64%)" stroke="hsl(222 34% 76%)" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="512,440 554,440 604,470 568,560 512,600" fill="hsl(222 34% 50%)" stroke="hsl(222 34% 62%)" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="456,560 512,600 568,560 548,660 512,690 476,660" fill="hsl(222 34% 70%)" stroke="hsl(222 34% 82%)" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="380,700 456,560 476,660 512,760" fill="hsl(222 34% 38%)" stroke="hsl(222 34% 50%)" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="644,700 568,560 548,660 512,760" fill="hsl(222 34% 30%)" stroke="hsl(222 34% 42%)" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="440" cy="520" r="9" fill="hsl(14 90% 58%)"/><circle cx="516" cy="520" r="9" fill="hsl(14 90% 58%)"/>
+<text x="512" y="980" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="22" letter-spacing="3" fill="hsl(220 8% 45%)">DEMO RENDER · LEFT</text>
+</svg>
