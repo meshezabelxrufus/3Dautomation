@@ -20,15 +20,15 @@ describe("migrations", () => {
     ]);
   });
 
-  it("records both migrations in the journal", async () => {
+  it("records all migrations in the journal", async () => {
     const { rows } = await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations");
-    expect(rows[0].n).toBe(2);
+    expect(rows[0].n).toBe(4);
   });
 
   it("is idempotent (re-running applies nothing and does not fail)", async () => {
     await runMigrations(inject("databaseUrl"));
     const { rows } = await pool.query("select count(*)::int as n from drizzle.__drizzle_migrations");
-    expect(rows[0].n).toBe(2);
+    expect(rows[0].n).toBe(4);
   });
 
   it("installs the workflow triggers", async () => {

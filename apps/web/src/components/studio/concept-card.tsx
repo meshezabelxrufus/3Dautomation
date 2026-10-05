@@ -4,6 +4,7 @@ import { Check, History } from "lucide-react";
 import type { ConceptDTO } from "@/lib/api/types";
 import { cn } from "@/lib/cn";
 import { DesignImage } from "@/components/ui/design-image";
+import { ConceptSheet } from "./concept-sheet";
 import { GenerationStatus } from "./generation-status";
 
 const BADGES: Partial<Record<ConceptDTO["status"], { label: string; className: string }>> = {
@@ -34,6 +35,9 @@ export function ConceptCard({ concept, imageUrl, revisionCount, onOpen, priority
         alt={`Concept ${concept.conceptNumber}: ${concept.title}`}
         priority={priority}
         className={cn(concept.status === "REJECTED" && "opacity-50 grayscale-[35%]")}
+        placeholder={
+          concept.status !== "GENERATING" ? <ConceptSheet number={concept.conceptNumber} shapeLanguage={concept.shapeLanguage} /> : undefined
+        }
       >
         {working ? (
           <GenerationStatus variant="overlay" title={concept.status === "REFINING" ? "Refining…" : "Generating…"} />

@@ -52,21 +52,18 @@ export function GeneratingStage({
   onOpen: (id: string) => void;
 }) {
   const requested = project.requestedConceptCount ?? 3;
-  const ready = concepts.filter((c) => c.imageUrl).length;
-  const total = Math.max(requested, concepts.length);
   return (
     <div className="flex flex-col gap-6">
       <GenerationStatus
-        title="Generating ideas"
+        title="Generating concepts…"
         description={STATUS_META.GENERATING_CONCEPTS.description}
         startedAt={startedAt}
-        progressLabel={`${ready} of ${total} ready`}
-        progress={total ? ready / total : undefined}
+        progressLabel={`${requested} concepts`}
       />
       <ConceptGallery
         concepts={concepts}
         revisions={revisions}
-        placeholders={Math.max(0, requested - concepts.length)}
+        placeholders={Math.max(0, requested - concepts.filter((c) => c.status !== "FAILED").length)}
         onOpen={onOpen}
       />
     </div>
@@ -107,7 +104,7 @@ export function ConceptsStage({
           <p className="text-callout text-ink-2">
             {visible.length} {visible.length === 1 ? "idea" : "ideas"}
             {shortlisted ? ` · ${shortlisted} shortlisted` : ""}
-            {rejected ? ` · ${rejected} rejected` : ""}. Open one to refine or approve it.
+            {rejected ? ` · ${rejected} rejected` : ""}. Open one to read its full direction.
           </p>
         </div>
         <Button

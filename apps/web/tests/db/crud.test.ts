@@ -63,13 +63,17 @@ describe("CRUD: concepts", () => {
     expect(remaining.map((c) => c.id)).toEqual([c1.id]);
   });
 
-  it("requires an image for READY concepts", async () => {
+  it("allows READY concepts without an image (images come later) but not FINAL ones", async () => {
     const project = await newProject(db);
     await wf.startConceptGeneration(db, project.id, { requestedCount: 1 });
-    await expectPgError(
-      db.insert(concepts).values({ projectId: project.id, conceptNumber: 1, title: "t", description: "d", status: "READY" }),
-      { code: "23514", constraint: "concepts_image_required" },
+    const { rows } = await pool.query(
+      `insert into concepts (project_id, concept_number, title, description, status) values ($1, 1, 't', 'd', 'READY') returning id`,
+      [project.id],
     );
+    await expectPgError(pool.query(`update concepts set status = 'FINAL' where id = $1`, [rows[0].id]), {
+      code: "23514",
+      constraint: "concepts_final_requires_image",
+    });
   });
 
   it("rejects duplicate concept numbers within a project", async () => {

@@ -1,0 +1,887 @@
+{
+  "name": "[3D Studio] M1 · Concepts — generate",
+  "nodes": [
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "3d-studio/concepts-generate",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "7f1c2b9a-4d3e-4f60-9b21-0a5c3d2e1f02",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — Inbound webhook token"
+        }
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000002",
+      "name": "Validate request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Validates the request from the web app. Model/effort/provider are configuration, not secrets.\nconst body = $input.first().json.body ?? {};\nconst errors = {};\nconst projectId = typeof body.project_id === 'string' ? body.project_id.trim() : '';\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) errors.project_id = 'project_id must be a UUID.';\nconst count = body.concept_count === undefined ? 3 : Number(body.concept_count);\nif (!Number.isInteger(count) || count < 2 || count > 5) errors.concept_count = 'concept_count must be an integer from 2 to 5.';\nconst cfg = body.config && typeof body.config === 'object' ? body.config : {};\nconst providerMode = cfg.provider_mode === 'mock' ? 'mock' : 'live';\nconst config = {\n  provider_mode: providerMode,\n  model: typeof cfg.model === 'string' && /^claude-[a-z0-9.-]+$/.test(cfg.model) ? cfg.model : 'claude-sonnet-5-5',\n  effort: ['low', 'medium', 'high', 'xhigh', 'max'].includes(cfg.effort) ? cfg.effort : 'high',\n  mock_scenario: providerMode === 'mock' && typeof cfg.mock_scenario === 'string' ? cfg.mock_scenario : 'ok',\n};\nreturn [{ json: { valid: Object.keys(errors).length === 0, errors, project_id: projectId, concept_count: count, config } }];"
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000003",
+      "name": "Request valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d0a1b2c3-0000-4000-8000-000000000003",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000004",
+      "name": "Respond 422 Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'validation_failed', message: 'Invalid request', fields: $json.errors } } }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000005",
+      "name": "Start generation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        240
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM start_concept_generation($1::uuid, $2::int, 'n8n');",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.concept_count ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000006",
+      "name": "Respond 503 Database",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'database_unavailable', message: 'The database is temporarily unavailable.' } } }}",
+        "options": {
+          "responseCode": 503
+        }
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000007",
+      "name": "Fail: database unavailable",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        420
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "Concept generation could not start: database unavailable"
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000008",
+      "name": "Prepare response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Turns the start_concept_generation() outcome into the HTTP answer for the web app.\nconst r = $input.first().json;\nconst req = $('Validate request').first().json;\nconst answers = {\n  started: [202, { project_id: req.project_id, status: 'GENERATING_CONCEPTS', accepted: true, concept_count: req.concept_count }],\n  not_found: [422, { error: { code: 'project_not_found', message: 'Project not found.' } }],\n  invalid_state: [409, { error: { code: 'invalid_state', message: `Concepts can't be generated while the project is ${r.current_status}.`, status: r.current_status } }],\n  invalid_request: [422, { error: { code: 'validation_failed', message: 'Invalid request', fields: { concept_count: 'concept_count must be an integer from 2 to 5.' } } }],\n};\nconst [statusCode, responseBody] = answers[r.outcome] ?? [500, { error: { code: 'unexpected', message: 'Unexpected result.' } }];\nreturn [{ json: { statusCode, body: responseBody, started: r.outcome === 'started', project: r, request: req } }];"
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000009",
+      "name": "Respond to caller",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000010",
+      "name": "Started?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d0a1b2c3-0000-4000-8000-000000000010",
+              "leftValue": "={{ $json.started }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000011",
+      "name": "Build Claude request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/concept-generation.cjs */\n\nconst d = $input.first().json;\nconst { state, request } = buildInitialState({\n  projectId: d.request.project_id,\n  projectName: d.project.project_name,\n  clientName: d.project.client_name,\n  designBrief: d.project.design_brief,\n  count: d.request.concept_count,\n  existing: d.project.existing_concepts ?? [],\n  config: d.request.config,\n});\nreturn [{ json: { state, request } }];"
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000012",
+      "name": "Attempt",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000013",
+      "name": "Live provider?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d0a1b2c3-0000-4000-8000-000000000013",
+              "leftValue": "={{ $json.state.provider_mode === 'live' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000014",
+      "name": "Claude: create message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "server-side-fallback-2026-07-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 150000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "3D Studio — Anthropic"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000015",
+      "name": "Mock Claude",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/concept-generation.cjs */\n\n// Offline provider for tests and development (config.provider_mode = \"mock\").\nconst { state } = $input.first().json;\nreturn [{ json: mockClaude(state) }];"
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000016",
+      "name": "Evaluate response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/concept-generation.cjs */\n\n// One decision per Claude call: save, retry (repair / backoff) or fail gracefully.\nconst { state, request } = $('Attempt').last().json;\nconst r = $input.first().json;\nlet result;\nif (r.transportError) result = { transportError: r.transportError };\nelse if (r.statusCode !== undefined) result = { statusCode: r.statusCode, body: r.body };\nelse result = { transportError: String(r.error?.message ?? r.message ?? r.error?.description ?? 'request failed') };\nreturn [{ json: evaluateAttempt(state, request, result) }];"
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000017",
+      "name": "Save?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e0a1b2c3-0000-4000-8000-000000000017",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "save",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000018",
+      "name": "Retry?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e0a1b2c3-0000-4000-8000-000000000018",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000019",
+      "name": "Backoff",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3080,
+        420
+      ],
+      "parameters": {
+        "amount": "={{ $json.delay_seconds }}",
+        "unit": "seconds"
+      },
+      "webhookId": "3c9d8e7f-1a2b-4c5d-8e9f-0a1b2c3d4e19"
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000020",
+      "name": "Save concepts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2860,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM complete_concept_generation($1::uuid, $2::jsonb, $3::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, JSON.stringify($json.concepts), JSON.stringify({ source: 'n8n', model: $json.meta.model, attempts: $json.meta.attempts, providerMode: $json.meta.providerMode, usage: $json.meta.usage, durationMs: $json.meta.durationMs }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000021",
+      "name": "Saved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d0a1b2c3-0000-4000-8000-000000000021",
+              "leftValue": "={{ $json.outcome === 'completed' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000022",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        40
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000023",
+      "name": "Fail: stale result",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        160
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "=Concepts discarded: the project is no longer generating ({{ $json.outcome }})"
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000024",
+      "name": "Save failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// The database rejected or could not store the concepts: fail the project cleanly.\nconst save = $('Evaluate response').last().json;\nconst err = $input.first().json;\nconst detail = String(err.message ?? err.error?.message ?? err.error?.description ?? 'database error').slice(0, 500);\nreturn [{ json: { action: 'fail', project_id: save.project_id, failure: { code: 'database_error', reason: 'The concepts could not be saved. Please try again.', detail }, meta: save.meta } }];"
+      }
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000025",
+      "name": "Failure",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        340
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000026",
+      "name": "Mark project failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3520,
+        340
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM fail_concept_generation($1::uuid, $2, $3::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.failure.reason, JSON.stringify({ code: $json.failure.code, detail: $json.failure.detail, attempts: $json.meta?.attempts, model: $json.meta?.model }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "c0c0e0c2-0002-4a3f-9d10-000000000027",
+      "name": "Fail: concept generation",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3740,
+        340
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "=Concept generation failed: {{ $('Failure').last().json.failure.code }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "node": "Request valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request valid?": {
+      "main": [
+        [
+          {
+            "node": "Start generation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 422 Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start generation": {
+      "main": [
+        [
+          {
+            "node": "Prepare response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 503 Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 503 Database": {
+      "main": [
+        [
+          {
+            "node": "Fail: database unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare response": {
+      "main": [
+        [
+          {
+            "node": "Respond to caller",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to caller": {
+      "main": [
+        [
+          {
+            "node": "Started?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Started?": {
+      "main": [
+        [
+          {
+            "node": "Build Claude request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build Claude request": {
+      "main": [
+        [
+          {
+            "node": "Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attempt": {
+      "main": [
+        [
+          {
+            "node": "Live provider?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live provider?": {
+      "main": [
+        [
+          {
+            "node": "Claude: create message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mock Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: create message": {
+      "main": [
+        [
+          {
+            "node": "Evaluate response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock Claude": {
+      "main": [
+        [
+          {
+            "node": "Evaluate response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate response": {
+      "main": [
+        [
+          {
+            "node": "Save?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save?": {
+      "main": [
+        [
+          {
+            "node": "Save concepts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry?": {
+      "main": [
+        [
+          {
+            "node": "Backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backoff": {
+      "main": [
+        [
+          {
+            "node": "Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save concepts": {
+      "main": [
+        [
+          {
+            "node": "Saved?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Saved?": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail: stale result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save failed": {
+      "main": [
+        [
+          {
+            "node": "Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failure": {
+      "main": [
+        [
+          {
+            "node": "Mark project failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark project failed": {
+      "main": [
+        [
+          {
+            "node": "Fail: concept generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 900
+  }
+}

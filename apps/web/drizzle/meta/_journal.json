@@ -15,6 +15,20 @@
       "when": 1791105123957,
       "tag": "0001_workflow_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791125699749,
+      "tag": "0002_concept_structured_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791125746028,
+      "tag": "0003_concept_generation_functions",
+      "breakpoints": true
     }
   ]
 }

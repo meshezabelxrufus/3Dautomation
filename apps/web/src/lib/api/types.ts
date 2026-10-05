@@ -55,8 +55,12 @@ export type ConceptDTO = {
   title: string;
   description: string;
   creativeDirection: string | null;
+  visualCharacteristics: string | null;
+  shapeLanguage: string | null;
   keyFeatures: string[];
   materials: string[];
+  /** Prompt for the image model, written by Claude (images are generated in a later step). */
+  generationPrompt: string | null;
   imageUrl: string | null;
   status: ConceptStatus;
   createdAt: string;

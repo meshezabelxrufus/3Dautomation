@@ -15,6 +15,8 @@ type DesignImageProps = {
   className?: string;
   /** Rendered over the image area (status overlays, badges). */
   children?: React.ReactNode;
+  /** Shown instead of the generic placeholder when there is no image yet. */
+  placeholder?: React.ReactNode;
 };
 
 /**
@@ -30,6 +32,7 @@ export function DesignImage({
   priority,
   className,
   children,
+  placeholder,
 }: DesignImageProps) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -53,6 +56,8 @@ export function DesignImage({
             loaded ? "opacity-100" : "opacity-0",
           )}
         />
+      ) : placeholder && !src ? (
+        <div className="absolute inset-0">{placeholder}</div>
       ) : (
         <div className="absolute inset-0 grid place-items-center text-ink-3" aria-hidden={!failed}>
           <ImageIcon className="size-7 opacity-50" strokeWidth={1.5} />

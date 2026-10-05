@@ -139,6 +139,11 @@ services:
       DATABASE_URL: postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${APP_DB_NAME}
       # Project n8n (in this stack) by default. For an external n8n use e.g. http://host.docker.internal:5678
       N8N_WEBHOOK_BASE_URL: ${N8N_WEBHOOK_BASE_URL:-http://n8n:5678}
+      N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:?set N8N_WEBHOOK_TOKEN in .env}
+      AI_PROVIDER_MODE: ${AI_PROVIDER_MODE:-live}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-5-5}
+      CLAUDE_EFFORT: ${CLAUDE_EFFORT:-high}
+      AI_MOCK_SCENARIO: ${AI_MOCK_SCENARIO:-}
       ASSET_STORAGE_DIR: /data/assets
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -101,7 +101,7 @@ A read-only audit of the shared instance (n8n public API, GET requests only) fou
 
 ### 2.1 Principles
 
-1. **n8n is the only component that talks to AI providers and Google Drive.** It holds every provider credential in its encrypted credential store.
+1. **n8n is the only component that talks to AI providers and Google Drive.** It holds every provider credential in its encrypted credential store. Since Step 4 it also performs workflow writes to Postgres (starting with project creation). That is safe because the database enforces the workflow rules itself (Step 2 triggers), whoever writes.
 2. **The browser never talks to n8n directly.** A thin backend-for-frontend (BFF) inside the web app handles authentication, ownership checks, rate limits, persistence and state transitions. It calls n8n server-to-server: via `host.docker.internal` against the shared test instance, and over a private network in production.
 3. **Postgres is the source of truth for product state.** It stores projects, concepts, versions, approvals and jobs. n8n is stateless orchestration. Its execution history is for debugging only and is never the system of record.
 4. **Everything is asynchronous.** Image generation takes from seconds to minutes. Every AI operation is a *job*: the BFF dispatches it, n8n acknowledges with `202`, does the work, and calls the BFF back. The frontend polls for job and project state.
@@ -951,8 +951,8 @@ These requirements assume "H3D" is a multi-view image-to-3D model such as Tencen
 | 2 | ✅ Docker Compose: postgres (app + n8n DBs), n8n (pinned, Postgres-backed), web (Next.js skeleton + `/api/health`). Health checks, `scripts/verify-stack.sh`, `docs/DEVELOPMENT.md` (done 2026-10-04 as "Step 1: infrastructure") | `verify-stack.sh --persistence` all green |
 | 3 | ✅ DB schema + migrations, workflow state machine (DB-enforced) + services + tests (done 2026-10-04 as "Step 2"). Better Auth moves to a later step | 71 tests green |
 | 4 | `packages/contracts` + job dispatch/callback infrastructure + asset storage + signed URLs + mock n8n stub | Callback integration tests green |
-| 5 | Guarded `n8n-deploy` / `n8n-export` scripts (§6.6–6.7) with `--dry-run` and pre-deploy backup. `[3D Studio]` credentials created in the shared instance under the `3d-automation` user. Sub-workflows `SUB-01..05`, error handler `WF-99` deployed **inactive** | Dry-run reviewed. All pre-existing workflows unchanged (before/after diff of the backup). Our workflows deployed |
-| 6 | `WF-01` concepts + concepts UI (cards, approve/reject, generate more) | Mock E2E part 1. **UI done 2026-10-04 ("Step 3")**: screens, workspace states, read API, polling, Server Actions; n8n dispatch pending |
+| 5 | ✅ (partly, "Step 4", 2026-10-04) `scripts/n8n-deploy.mjs` (credentials, deploy, status, dry-run, backups) + project-create workflow. Still to do: export script, `WF-99` error handler, shared-instance user. Original scope: Guarded `n8n-deploy` / `n8n-export` scripts (§6.6–6.7) with `--dry-run` and pre-deploy backup. `[3D Studio]` credentials created in the shared instance under the `3d-automation` user. Sub-workflows `SUB-01..05`, error handler `WF-99` deployed **inactive** | Dry-run reviewed. All pre-existing workflows unchanged (before/after diff of the backup). Our workflows deployed |
+| 6 | `WF-01` concepts + concepts UI (cards, approve/reject, generate more) | Mock E2E part 1. **UI done 2026-10-04 ("Step 3")**. **WF-01 done 2026-10-05 ("Step 5")**: Claude concepts via n8n with repair/retry, DB functions for the transitions, mock provider. Images (Nano Banana) are a later step |
 | 7 | `WF-02` refinement + version history UI | Mock E2E part 2 |
 | 8 | `WF-03` four views + views review/regenerate/approve UI | Mock E2E part 3; live multi-view consistency spike |
 | 9 | `WF-04` Drive export + manifest + delivered UI | Drive structure verified on test folder |

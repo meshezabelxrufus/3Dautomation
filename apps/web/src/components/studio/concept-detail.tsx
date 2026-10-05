@@ -7,6 +7,7 @@ import type { ProjectStatus } from "@/server/domain/workflow-states";
 import { Button } from "@/components/ui/button";
 import { DesignImage } from "@/components/ui/design-image";
 import { ApprovalDialog } from "./approval-dialog";
+import { ConceptSheet } from "./concept-sheet";
 import { GenerationStatus } from "./generation-status";
 import { RefinementInput } from "./refinement-input";
 import { ORIGINAL, RevisionHistory } from "./revision-history";
@@ -71,10 +72,13 @@ export function ConceptDetail({
             alt={`${concept.title}, ${previewLabel.toLowerCase()}`}
             sizes="(min-width: 1024px) 55vw, 100vw"
             priority
+            placeholder={<ConceptSheet number={concept.conceptNumber} shapeLanguage={concept.shapeLanguage} size="detail" />}
           >
             {refining ? <GenerationStatus variant="overlay" title="Applying your feedback…" /> : null}
           </DesignImage>
-          <p className="text-caption text-ink-3">Showing: {previewLabel}</p>
+          <p className="text-caption text-ink-3">
+            {previewImage ? `Showing: ${previewLabel}` : "Images are generated from these concept details in the next step."}
+          </p>
         </div>
 
         <div className="flex flex-col gap-7">
@@ -84,24 +88,36 @@ export function ConceptDetail({
             <p className="text-body text-ink-2">{concept.description}</p>
           </header>
 
-          {concept.creativeDirection || concept.keyFeatures.length || concept.materials.length ? (
-            <dl className="flex flex-col gap-4 border-t border-hairline pt-5">
-              {concept.creativeDirection ? (
-                <div className="flex flex-col gap-1">
-                  <dt className="text-eyebrow text-ink-3">Creative direction</dt>
-                  <dd className="text-callout text-ink">{concept.creativeDirection}</dd>
-                </div>
-              ) : null}
-              <TagList label="Key features" items={concept.keyFeatures} />
-              <TagList label="Materials" items={concept.materials} />
-            </dl>
+          <dl className="flex flex-col gap-4 border-t border-hairline pt-5">
+            <TextItem label="Creative direction" value={concept.creativeDirection} />
+            <TextItem label="Shape language" value={concept.shapeLanguage} />
+            <TextItem label="Visual characteristics" value={concept.visualCharacteristics} />
+            <TagList label="Key features" items={concept.keyFeatures} />
+            <TagList label="Materials" items={concept.materials} />
+          </dl>
+
+          {concept.generationPrompt ? (
+            <details className="group rounded-2xl border border-hairline bg-surface-2 px-4 py-3">
+              <summary className="cursor-pointer select-none text-callout font-medium text-ink-2 marker:text-ink-3">
+                Image-generation prompt
+              </summary>
+              <p className="mt-2 font-mono text-caption leading-relaxed text-ink-2">{concept.generationPrompt}</p>
+            </details>
           ) : null}
 
           {decidable ? (
             <div className="flex flex-col gap-3 border-t border-hairline pt-5">
-              <Button size="lg" onClick={() => setConfirming(true)} disabled={busy} icon={<Check className="size-4" />}>
+              <Button
+                size="lg"
+                onClick={() => setConfirming(true)}
+                disabled={busy || !previewImage}
+                icon={<Check className="size-4" />}
+              >
                 Approve as final design
               </Button>
+              {!previewImage ? (
+                <p className="text-caption text-ink-3">Final approval unlocks once this concept has an image.</p>
+              ) : null}
               <div className="flex gap-2">
                 {concept.status !== "SELECTED" ? (
                   <Button variant="secondary" className="flex-1" onClick={onSelect} loading={isRunning("select")} disabled={busy}>
@@ -132,7 +148,9 @@ export function ConceptDetail({
                     ? "A refinement is in progress. You can send another once it's done."
                     : !reviewing
                       ? "Refinements are available while reviewing concepts."
-                      : null
+                      : !previewImage
+                        ? "Refinements become available once concept images are generated."
+                        : null
                 }
               />
             </div>
@@ -161,6 +179,16 @@ export function ConceptDetail({
         }}
       />
     </article>
+  );
+}
+
+function TextItem({ label, value }: { label: string; value: string | null }) {
+  if (!value) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <dt className="text-eyebrow text-ink-3">{label}</dt>
+      <dd className="text-callout text-ink">{value}</dd>
+    </div>
   );
 }
 

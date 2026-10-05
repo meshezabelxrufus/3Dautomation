@@ -15,6 +15,9 @@
     "stack:down": "docker compose down",
     "stack:ps": "docker compose ps",
     "stack:logs": "docker compose logs -f --tail=100",
-    "stack:verify": "sh scripts/verify-stack.sh"
+    "stack:verify": "sh scripts/verify-stack.sh",
+    "n8n:status": "node scripts/n8n-deploy.mjs status",
+    "n8n:credentials": "node scripts/n8n-deploy.mjs credentials",
+    "n8n:deploy": "node scripts/n8n-deploy.mjs deploy"
   }
 }

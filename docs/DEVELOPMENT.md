@@ -23,6 +23,8 @@ Architecture background: [`MILESTONE-1-ARCHITECTURE.md`](./MILESTONE-1-ARCHITECT
 16. [Database schema and migrations](#16-database-schema-and-migrations)
 17. [Running the tests](#17-running-the-tests)
 18. [Frontend](#18-frontend)
+19. [n8n workflows](#19-n8n-workflows)
+20. [Concept generation with Claude](#20-concept-generation-with-claude)
 
 ---
 
@@ -424,4 +426,94 @@ Everything shown comes from the database status, not from browser flags.
 - a translucent header.
 
 It respects reduced-motion, reduced-transparency and increased-contrast settings, and works from phone width up.
+
+## 19. n8n workflows
+
+Project creation runs through n8n:
+
+```
+browser → Server Action (web) → POST http://n8n:5678/webhook/3d-studio/project-create
+        (header X-Webhook-Token)  → validate → INSERT project + PROJECT_CREATED event (one statement)
+        → 201 { project_id, status, created_at } → web starts concept generation → /projects/<id>
+```
+
+- **No browser-to-n8n traffic:** the browser never calls n8n, and the webhook token stays on the server (`N8N_WEBHOOK_TOKEN`).
+- **One service layer:** server code calls n8n only through `apps/web/src/server/n8n/`. `client.ts` handles the token, timeout and typed errors; `projects.ts` covers the project-create contract.
+- **Failures are user-safe:**
+
+  | Situation | Server returns | The person sees |
+  |---|---|---|
+  | n8n down, workflow not published, or database unreachable | `503` | "Nothing was saved, try again" (form values kept) |
+  | Invalid input | `422` | Field messages |
+
+  A database failure inside the workflow is also recorded as a **failed execution** in n8n.
+
+**First-time setup on a fresh stack:**
+
+1. Open http://localhost:5680 and create the n8n owner account.
+2. In n8n, go to Settings → n8n API, create a key, and put it in `.env` as `N8N_DEPLOY_API_KEY_LOCAL`.
+3. Create the n8n credentials from `.env`:
+
+   ```bash
+   pnpm n8n:credentials
+   ```
+
+4. Deploy and publish the workflows:
+
+   ```bash
+   pnpm n8n:deploy
+   ```
+
+5. Run `sh scripts/verify-stack.sh`. It checks that the webhook is deployed and rejects calls without the token.
+
+See `n8n/README.md` for the rules and options.
+
+| Symptom | Fix |
+|---|---|
+| Create fails with "automation service didn't respond", and n8n logs show nothing | The workflow isn't published (404) or the token differs (403). Run `pnpm n8n:status`, then `pnpm n8n:credentials && pnpm n8n:deploy` |
+| An execution fails with `database_unavailable` | n8n can't reach Postgres. Check `N8N_APP_DB_HOST` and re-run `pnpm n8n:credentials` |
+| `N8N_WEBHOOK_TOKEN` was changed in `.env` | Re-run `pnpm n8n:credentials` and recreate the web container (`docker compose up -d`) |
+
+## 20. Concept generation with Claude
+
+"Generate ideas" (and "More ideas" or "Retry") calls the n8n workflow `3d-studio/concepts-generate`.
+
+```
+web → n8n: start_concept_generation()  (project → GENERATING_CONCEPTS + event)
+    → 202 straight away (the workspace shows "Generating concepts…" and polls)
+    → Claude (structured JSON, up to 3 attempts) → validate
+    → complete_concept_generation()  (concepts + event + project → CONCEPT_REVIEW, atomically)
+    or fail_concept_generation()     (project → FAILED with a client-safe reason + event)
+```
+
+- **Model:** `CLAUDE_MODEL` (default `claude-sonnet-5-5`) with effort `CLAUDE_EFFORT` (default `high`). JSON output is constrained with `output_config.format` (`json_schema`). Refusal fallback is on (`fallbacks: "default"`).
+- **Reliability:** each Claude answer goes through four stages:
+  1. **Parsing:** the text is never trusted. Fences, surrounding text and trailing commas are handled.
+  2. **Local repair:** key names and list formats are normalised.
+  3. **Validation:** every field, the concept count, and duplicate or near-identical concepts.
+  4. **Structured repair:** if invalid, Claude is shown its own output plus the errors.
+
+  Overloaded or failed API calls are retried with backoff. Auth errors and refusals fail immediately.
+- **Database state:** it changes only through the three database functions (migration 0003), so it's atomic and rule-checked. A double click can't start two runs. A generation n8n never finished (crash or restart) is marked FAILED after 16 minutes, the next time the project is opened.
+- **No images yet:** concepts arrive as structured text and display as "concept sheets". Refinement and final approval stay disabled until images exist.
+
+**API key:** enter it in n8n, in the credential **"3D Studio — Anthropic"**. Alternatively set `ANTHROPIC_API_KEY` in `.env` and run `pnpm n8n:credentials`.
+
+**Mock mode (no API cost):** set these in `.env` (Docker) or `apps/web/.env.local` (dev server):
+
+```dotenv
+AI_PROVIDER_MODE=mock
+AI_MOCK_SCENARIO=ok
+```
+
+Other `AI_MOCK_SCENARIO` values reproduce failures:
+
+| Scenario | Outcome |
+|---|---|
+| `repairable` | Fixed locally, saved on attempt 1 |
+| `malformed_then_ok`, `too_similar_then_ok`, `truncated_then_ok`, `api_error_then_ok` | Saved on attempt 2 |
+| `always_malformed`, `api_down`, `transport_error` | Fail after 3 attempts |
+| `auth_error`, `refusal` | Fail immediately |
+
+Each n8n execution is listed in the n8n UI. A failed generation also shows as a **failed** execution there, with the technical detail.
 

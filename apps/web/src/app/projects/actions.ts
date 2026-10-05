@@ -15,7 +15,9 @@ import {
   type CreateProjectFieldErrors,
 } from "@/lib/validation/project";
 import * as commands from "@/server/commands/projects";
+import { N8nContractError, N8nRejectedError, N8nUnavailableError } from "@/server/n8n/errors";
 import { InvalidStateTransitionError, NotFoundError, WorkflowGuardError } from "@/server/workflow/errors";
+import { getProject } from "@/server/queries/projects";
 import * as wf from "@/server/workflow/workflow";
 
 export type ActionResult = { ok: true } | { ok: false; message: string };
@@ -35,6 +37,18 @@ function toMessage(err: unknown): string {
     return err.message.replace(/^workflow_guard_failed: /, "");
   }
   if (err instanceof NotFoundError) return "That item no longer exists.";
+  if (err instanceof N8nUnavailableError) {
+    console.error("[n8n]", err.message);
+    return "The studio's automation service didn't respond. Nothing was saved. Please try again in a moment.";
+  }
+  if (err instanceof N8nRejectedError) {
+    if (err.code === "invalid_state") return "Concepts are already being generated, or the project has moved on. The latest state is shown now.";
+    return "The request was rejected. Check the details and try again.";
+  }
+  if (err instanceof N8nContractError) {
+    console.error("[n8n]", err.message);
+    return "Something unexpected came back from the automation service. Please try again.";
+  }
   throw err;
 }
 
@@ -65,8 +79,11 @@ export async function createProjectAction(_prev: CreateProjectState, formData: F
 
   let projectId: string;
   try {
-    projectId = (await commands.createProjectAndGenerate(getDb(), parsed.data)).id;
+    projectId = (await commands.createProjectAndGenerate(parsed.data)).projectId;
   } catch (err) {
+    if (err instanceof N8nRejectedError && Object.keys(err.fields).length) {
+      return { fields: err.fields as CreateProjectFieldErrors, values };
+    }
     return { message: toMessage(err), values };
   }
   revalidatePath("/projects");
@@ -75,7 +92,7 @@ export async function createProjectAction(_prev: CreateProjectState, formData: F
 
 export async function generateIdeasAction(projectId: string, ideaCount: number): Promise<ActionResult> {
   const count = Math.min(IDEA_COUNT_MAX, Math.max(IDEA_COUNT_MIN, Math.round(ideaCount)));
-  return run(projectId, () => commands.generateIdeas(getDb(), id(projectId), count));
+  return run(projectId, () => commands.generateIdeas(id(projectId), count));
 }
 
 export async function selectConceptAction(projectId: string, conceptId: string): Promise<ActionResult> {
@@ -116,5 +133,13 @@ export async function approveViewsAndDeliverAction(projectId: string): Promise<A
 }
 
 export async function retryProjectAction(projectId: string): Promise<ActionResult> {
-  return run(projectId, () => wf.retryProject(getDb(), id(projectId)));
+  return run(projectId, async () => {
+    const project = await getProject(getDb(), id(projectId));
+    if (!project) throw new NotFoundError("project", projectId);
+    // Concept generation is an n8n job: retrying means running it again.
+    if (project.status === "FAILED" && project.failedFromStatus === "GENERATING_CONCEPTS") {
+      return commands.generateIdeas(project.id, project.requestedConceptCount ?? 3);
+    }
+    return wf.retryProject(getDb(), project.id);
+  });
 }

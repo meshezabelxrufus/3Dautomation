@@ -1,22 +1,52 @@
 import { describe, expect, it } from "vitest";
 import * as q from "@/server/queries/projects";
 import * as wf from "@/server/workflow/workflow";
-import { createProjectAndGenerate } from "@/server/commands/projects";
+import {
+  CONCEPT_GENERATION_DEADLINE_MS,
+  createProjectAndGenerate,
+  reapStaleConceptGeneration,
+} from "@/server/commands/projects";
 import { img, inConceptReview, inViewReview, newProject } from "../setup/factories";
 import { connectTestDb } from "../setup/test-db";
 
-const { db } = connectTestDb();
+const { db, pool } = connectTestDb();
 
 describe("read models used by the UI and GET API", () => {
-  it("createProjectAndGenerate creates the project in GENERATING_CONCEPTS with the requested count", async () => {
-    const p = await createProjectAndGenerate(db, {
-      projectName: "Q",
-      clientName: "C",
-      designBrief: "A detailed enough design brief here.",
-      ideaCount: 4,
+  // Stand-ins for the two n8n workflows: same contracts, but writing to the test database.
+  const fakeCreate = async (input: { projectName: string; clientName: string; designBrief: string }) => {
+    const created = await wf.createProject(db, input);
+    return { projectId: created.id, status: created.status, createdAt: created.createdAt.toISOString() };
+  };
+  const fakeGenerate = async ({ projectId, conceptCount }: { projectId: string; conceptCount: number }) => {
+    await pool.query(`select start_concept_generation($1::uuid, $2::int, 'test')`, [projectId, conceptCount]);
+    return { projectId, conceptCount };
+  };
+  const brief = { projectName: "Q", clientName: "C", designBrief: "A detailed enough design brief here.", ideaCount: 4 };
+
+  it("createProjectAndGenerate creates the project and starts generation with the requested count", async () => {
+    const r = await createProjectAndGenerate(brief, { createProject: fakeCreate, generateConcepts: fakeGenerate });
+    expect(r.generationStarted).toBe(true);
+    expect(await q.getProject(db, r.projectId)).toMatchObject({ status: "GENERATING_CONCEPTS", requestedConceptCount: 4 });
+  });
+
+  it("keeps the project (DRAFT) when generation cannot start", async () => {
+    const r = await createProjectAndGenerate(brief, {
+      createProject: fakeCreate,
+      generateConcepts: async () => {
+        throw new Error("n8n unavailable");
+      },
     });
-    const dto = await q.getProject(db, p.id);
-    expect(dto).toMatchObject({ status: "GENERATING_CONCEPTS", requestedConceptCount: 4, conceptCount: 0 });
+    expect(r.generationStarted).toBe(false);
+    expect((await q.getProject(db, r.projectId))?.status).toBe("DRAFT");
+  });
+
+  it("reaps a generation that never finished, and leaves fresh ones alone", async () => {
+    const p = await newProject(db);
+    await pool.query(`select start_concept_generation($1::uuid, 3, 'test')`, [p.id]);
+    expect(await reapStaleConceptGeneration(db, p.id)).toBe(false); // just started
+    const later = new Date(Date.now() + CONCEPT_GENERATION_DEADLINE_MS + 60_000);
+    expect(await reapStaleConceptGeneration(db, p.id, later)).toBe(true);
+    expect(await q.getProject(db, p.id)).toMatchObject({ status: "FAILED", failedFromStatus: "GENERATING_CONCEPTS" });
   });
 
   it("returns ISO date strings and null for unknown ids", async () => {

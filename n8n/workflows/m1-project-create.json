@@ -1,0 +1,269 @@
+{
+  "name": "[3D Studio] M1 · Project — create",
+  "nodes": [
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "5d6a3c58-7e0e-4bd6-9a51-3d0b1f1a2c01",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "3d-studio/project-create",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — Inbound webhook token"
+        }
+      }
+    },
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000002",
+      "name": "Validate input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Validates the request body. Mirrors the app's createProjectSchema and the DB checks.\n// Output: { valid, errors: { field: message }, project_name, client_name, design_brief }\nconst body = $input.first().json.body ?? {};\nconst rules = {\n  project_name: { min: 1, max: 200, label: 'Project name' },\n  client_name: { min: 1, max: 200, label: 'Client name' },\n  design_brief: { min: 20, max: 4000, label: 'Design brief' },\n};\nconst errors = {};\nconst values = {};\nfor (const [field, rule] of Object.entries(rules)) {\n  const raw = body[field];\n  if (typeof raw !== 'string' || raw.trim().length === 0) {\n    errors[field] = `${rule.label} is required.`;\n    continue;\n  }\n  const value = raw.trim();\n  if (value.length < rule.min) errors[field] = `${rule.label} must be at least ${rule.min} characters.`;\n  else if (value.length > rule.max) errors[field] = `${rule.label} must be at most ${rule.max} characters.`;\n  else values[field] = value;\n}\nreturn [{ json: { valid: Object.keys(errors).length === 0, errors, ...values } }];"
+      }
+    },
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000003",
+      "name": "Is valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c0a1b2c3-0000-4000-8000-000000000001",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000004",
+      "name": "Create project + event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        200
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH created AS (\n  INSERT INTO projects (project_name, client_name, design_brief)\n  VALUES ($1, $2, $3)\n  RETURNING id, status, created_at\n), event AS (\n  INSERT INTO project_events (project_id, event_type, payload)\n  SELECT id, 'PROJECT_CREATED', jsonb_build_object('projectName', $1::text, 'clientName', $2::text, 'source', 'n8n')\n  FROM created\n  RETURNING id\n)\nSELECT created.id AS project_id, created.status, created.created_at\nFROM created, event;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_name, $json.client_name, $json.design_brief ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      }
+    },
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000005",
+      "name": "Respond 201 Created",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        980,
+        100
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { project_id: $json.project_id, status: $json.status, created_at: $json.created_at } }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000006",
+      "name": "Map database error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Maps a database failure to a safe HTTP response. Raw driver messages are never returned.\n// Error-output items carry text in json.message and/or json.error.{message,description}.\nconst item = $input.first().json;\nconst err = item.error && typeof item.error === 'object' ? item.error : {};\nconst message = [item.message, typeof item.error === 'string' ? item.error : '', err.message, err.description]\n  .filter(Boolean)\n  .join(' | ');\nlet statusCode = 500;\nlet code = 'database_error';\nlet text = 'The project could not be saved.';\nif (/check constraint|workflow_guard|invalid_state_transition|violates/i.test(message)) {\n  statusCode = 422;\n  code = 'rejected_by_database';\n  text = 'The project data was rejected by the database rules.';\n} else if (/host not found|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|connection refused|could not connect|connect|timeout|terminat/i.test(message)) {\n  statusCode = 503;\n  code = 'database_unavailable';\n  text = 'The database is temporarily unavailable.';\n}\nreturn [{ json: { statusCode, body: { error: { code, message: text } } } }];"
+      }
+    },
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000007",
+      "name": "Respond database error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1220,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      }
+    },
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000008",
+      "name": "Respond 422 Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        720,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'validation_failed', message: 'Invalid project', fields: $json.errors } } }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    },
+    {
+      "id": "b1a1e0c2-0001-4a3f-9d10-000000000009",
+      "name": "Mark execution failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1460,
+        300
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "=Project create failed: {{ $('Map database error').first().json.body.error.code }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate input": {
+      "main": [
+        [
+          {
+            "node": "Is valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is valid?": {
+      "main": [
+        [
+          {
+            "node": "Create project + event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 422 Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create project + event": {
+      "main": [
+        [
+          {
+            "node": "Respond 201 Created",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Map database error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map database error": {
+      "main": [
+        [
+          {
+            "node": "Respond database error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond database error": {
+      "main": [
+        [
+          {
+            "node": "Mark execution failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 30
+  }
+}

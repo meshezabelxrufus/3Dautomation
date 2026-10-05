@@ -104,6 +104,8 @@ export const concepts = pgTable(
     title: text("title").notNull(),
     description: text("description").notNull(),
     creativeDirection: text("creative_direction"),
+    visualCharacteristics: text("visual_characteristics"),
+    shapeLanguage: text("shape_language"),
     keyFeatures: text("key_features").array().notNull().default(sql`'{}'::text[]`),
     materials: text("materials").array().notNull().default(sql`'{}'::text[]`),
     generationPrompt: text("generation_prompt"),
@@ -118,10 +120,9 @@ export const concepts = pgTable(
     // Target for composite FKs that must stay inside one project.
     unique("concepts_id_project_key").on(t.id, t.projectId),
     check("concepts_concept_number_positive", sql`${t.conceptNumber} >= 1`),
-    check(
-      "concepts_image_required",
-      sql`${t.status} in ('GENERATING', 'FAILED') or ${t.imageUrl} is not null`,
-    ),
+    // Concepts are reviewable as structured text before images exist (images arrive in a
+    // later step); only a FINAL concept must have an image.
+    check("concepts_final_requires_image", sql`${t.status} <> 'FINAL' or ${t.imageUrl} is not null`),
     index("concepts_project_status_idx").on(t.projectId, t.status),
   ],
 );

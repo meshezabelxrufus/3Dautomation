@@ -79,6 +79,10 @@ run_checks() {
     check "GET $N8N_URL/healthz" curl -fsS -o /dev/null "$N8N_URL/healthz"
     check "GET $N8N_URL/healthz/readiness (DB connected)" curl -fsS -o /dev/null "$N8N_URL/healthz/readiness"
     check "editor UI served at $N8N_URL/" curl -fsS -o /dev/null "$N8N_URL/"
+    for wh in project-create concepts-generate; do
+      hook=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$N8N_URL/webhook/3d-studio/$wh" -H 'content-type: application/json' -d '{}')
+      if [ "$hook" = 403 ]; then pass "$wh workflow deployed and rejects calls without the token (403)"; else fail "$wh workflow deployed and protected (got HTTP $hook; deploy with: pnpm n8n:credentials && pnpm n8n:deploy)"; fi
+    done
     tables=$(psql_as "$N8N_DB_USER" "$N8N_DB_PASSWORD" "$N8N_DB_NAME" "select count(*) from information_schema.tables where table_schema='public'" 2>/dev/null || echo 0)
     if [ "${tables:-0}" -gt 10 ]; then pass "n8n schema stored in Postgres ($tables tables)"; else fail "n8n schema stored in Postgres ($tables tables)"; fi
   fi
