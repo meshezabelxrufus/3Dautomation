@@ -5,9 +5,9 @@ import { cn } from "@/lib/cn";
 import { RelativeTime } from "./relative-time";
 
 /** The client's original brief, always one glance away. Long briefs collapse. */
-export function BriefCard({ brief, createdAt }: { brief: string; createdAt: string }) {
+export function BriefCard({ brief, createdAt, compact }: { brief: string; createdAt: string; compact?: boolean }) {
   const [expanded, setExpanded] = useState(false);
-  const long = brief.length > 280;
+  const long = brief.length > (compact ? 200 : 280);
   return (
     <section aria-labelledby="brief-heading" className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-hairline bg-surface p-5">
       <div className="flex items-baseline justify-between gap-3">
@@ -16,7 +16,15 @@ export function BriefCard({ brief, createdAt }: { brief: string; createdAt: stri
         </h2>
         <RelativeTime iso={createdAt} className="text-caption text-ink-3" />
       </div>
-      <p className={cn("whitespace-pre-line text-callout text-ink", long && !expanded && "line-clamp-6")}>{brief}</p>
+      <p
+        className={cn(
+          "whitespace-pre-line text-callout text-ink",
+          compact && "max-w-[80ch]",
+          long && !expanded && (compact ? "line-clamp-2" : "line-clamp-6"),
+        )}
+      >
+        {brief}
+      </p>
       {long ? (
         <button
           type="button"

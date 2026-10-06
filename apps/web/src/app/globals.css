@@ -98,6 +98,8 @@ html {
 }
 
 body {
+  /* Long unbroken names (project titles, client names) wrap instead of being clipped. */
+  overflow-wrap: break-word;
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-sans);

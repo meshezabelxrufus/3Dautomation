@@ -12,7 +12,9 @@ async function timed(fn: () => Promise<void>): Promise<CheckResult> {
     await fn();
     return { status: "ok", latencyMs: Math.round(performance.now() - started) };
   } catch (err) {
-    return { status: "error", error: err instanceof Error ? err.message : String(err) };
+    // Public endpoint: no hostnames or driver messages in the response; details go to the server log.
+    console.error("[health] check failed:", err instanceof Error ? err.message : err);
+    return { status: "error", error: "unavailable" };
   }
 }
 

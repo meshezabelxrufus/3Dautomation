@@ -47,6 +47,9 @@ export const VIEW_STATUSES = ["GENERATING", "READY", "APPROVED", "FAILED"] as co
 export type ViewStatus = (typeof VIEW_STATUSES)[number];
 
 export const VIEW_TYPES = ["FRONT", "BACK", "LEFT", "RIGHT"] as const;
+
+export const ASSET_KINDS = ["CONCEPT", "REVISION", "VIEW", "REFERENCE"] as const;
+export type AssetKind = (typeof ASSET_KINDS)[number];
 export type ViewType = (typeof VIEW_TYPES)[number];
 
 export const PROJECT_EVENT_TYPES = [
@@ -65,6 +68,10 @@ export const PROJECT_EVENT_TYPES = [
   "DRIVE_UPLOAD_COMPLETED",
   "PROJECT_COMPLETED",
   "GENERATION_FAILED",
+  "CONCEPT_IMAGE_GENERATED",
+  "CONCEPT_IMAGE_FAILED",
+  /** A selected or rejected concept returned to READY (unselect / restore). */
+  "CONCEPT_RESTORED",
 ] as const;
 export type ProjectEventType = (typeof PROJECT_EVENT_TYPES)[number];
 
@@ -119,7 +126,8 @@ export const REVISION_MACHINE: StateMachine<RevisionStatus> = {
     GENERATING: ["READY", "FAILED"],
     READY: ["SELECTED"],
     SELECTED: ["READY"],
-    // FAILED is terminal: a new refinement creates a new revision.
+    // A failed refinement can be retried in place (it never produced an image).
+    FAILED: ["GENERATING"],
   },
 };
 

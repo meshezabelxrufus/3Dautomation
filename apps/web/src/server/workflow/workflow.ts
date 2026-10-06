@@ -297,6 +297,20 @@ export function rejectConcept(db: Database, conceptId: string, reason?: string):
   });
 }
 
+/** Undo a selection or a rejection: SELECTED / REJECTED -> READY. Nothing is ever deleted. */
+export function restoreConcept(db: Database, conceptId: string): Promise<Concept> {
+  return inTx(db, async (tx) => {
+    const concept = await lockConcept(tx, conceptId);
+    requireProjectStatus(await lockProject(tx, concept.projectId), ["CONCEPT_REVIEW"], "restoring a concept");
+    if (concept.status !== "SELECTED" && concept.status !== "REJECTED") {
+      throw new WorkflowGuardError("workflow_guard_failed: only a selected or rejected concept can be restored");
+    }
+    const updated = await setConceptStatus(tx, concept, "READY");
+    await recordEvent(tx, concept.projectId, "CONCEPT_RESTORED", { conceptId, from: concept.status });
+    return updated;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Refinement
 // ---------------------------------------------------------------------------

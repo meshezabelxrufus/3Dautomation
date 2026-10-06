@@ -49,7 +49,7 @@ export function ApprovalDialog({
             {/* The overlay doubles as the positioning container: bottom sheet on phones, centered on larger screens. */}
             <Dialog.Overlay asChild forceMount>
               <motion.div
-                className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-scrim p-3 sm:items-center sm:p-6"
+                className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto overscroll-contain bg-scrim p-3 sm:items-start sm:p-6"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -57,14 +57,21 @@ export function ApprovalDialog({
               >
                 <Dialog.Content asChild forceMount>
                   <motion.div
-                    className="flex w-full max-w-lg flex-col gap-5 rounded-[1.5rem] border border-hairline bg-surface p-5 shadow-float outline-none sm:p-7"
+                    className="flex w-full max-w-lg flex-col gap-5 rounded-[1.5rem] border border-hairline bg-surface p-5 shadow-float outline-none sm:my-auto sm:p-7"
                     initial={{ opacity: 0, y: 24, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 24, scale: 0.98 }}
                     transition={spring}
                   >
                     {previewImage !== undefined ? (
-                      <DesignImage src={previewImage} alt={previewAlt} aspect="aspect-[4/3]" sizes="(min-width: 640px) 32rem, 100vw" />
+                      // Height-capped so the decision buttons stay reachable on short screens; the dialog scrolls beyond that.
+                      <DesignImage
+                        src={previewImage}
+                        alt={previewAlt}
+                        aspect="aspect-[4/3]"
+                        className="mx-auto w-full max-w-[min(100%,calc(36dvh*4/3))]"
+                        sizes="(min-width: 640px) 32rem, 100vw"
+                      />
                     ) : null}
                     <div className="flex flex-col gap-2">
                       <Dialog.Title className="text-title text-ink">{title}</Dialog.Title>

@@ -11,16 +11,31 @@ export type ConceptGenerationConfig = {
   model: string;
   effort: "low" | "medium" | "high" | "xhigh" | "max";
   mock_scenario?: string;
+  /** Nano Banana model for the concept images (each concept gets its own n8n image job). */
+  image_model: string;
+  /** "gemini" (Nano Banana, default) or "pollinations" (for testing the flow without a Gemini key). */
+  image_provider?: "gemini" | "pollinations";
+  /** Pollinations model id, e.g. "black-forest-labs/flux.2-klein-4b" (n8n's default when omitted). */
+  pollinations_model?: string;
+  /** Pollinations model for the four views; must be able to move the camera ("openai/gpt-image-1-mini" by default). */
+  pollinations_view_model?: string;
+  image_mock_scenario?: string;
 };
 
 /** Non-secret generation settings from the web app's environment (sent with each request). */
 export function conceptConfigFromEnv(env: NodeJS.ProcessEnv = process.env): ConceptGenerationConfig {
   const effort = env.CLAUDE_EFFORT as ConceptGenerationConfig["effort"] | undefined;
+  const mock = env.AI_PROVIDER_MODE === "mock";
   return {
-    provider_mode: env.AI_PROVIDER_MODE === "mock" ? "mock" : "live",
+    provider_mode: mock ? "mock" : "live",
     model: env.CLAUDE_MODEL || "claude-sonnet-5-5",
     effort: effort && ["low", "medium", "high", "xhigh", "max"].includes(effort) ? effort : "high",
-    ...(env.AI_PROVIDER_MODE === "mock" && env.AI_MOCK_SCENARIO ? { mock_scenario: env.AI_MOCK_SCENARIO } : {}),
+    ...(mock && env.AI_MOCK_SCENARIO ? { mock_scenario: env.AI_MOCK_SCENARIO } : {}),
+    image_model: env.IMAGE_MODEL || "gemini-3.1-flash-image",
+    ...(env.IMAGE_PROVIDER === "pollinations" ? { image_provider: "pollinations" as const } : {}),
+    ...(env.IMAGE_PROVIDER === "pollinations" && env.POLLINATIONS_MODEL ? { pollinations_model: env.POLLINATIONS_MODEL } : {}),
+    ...(env.IMAGE_PROVIDER === "pollinations" && env.POLLINATIONS_VIEW_MODEL ? { pollinations_view_model: env.POLLINATIONS_VIEW_MODEL } : {}),
+    ...(mock && env.AI_IMAGE_MOCK_SCENARIO ? { image_mock_scenario: env.AI_IMAGE_MOCK_SCENARIO } : {}),
   };
 }
 

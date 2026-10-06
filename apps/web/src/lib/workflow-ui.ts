@@ -37,7 +37,7 @@ export const STATUS_META: Record<ProjectStatus, StatusMeta> = {
   },
   CONCEPT_REVIEW: {
     label: "Concepts ready",
-    description: "Review the concepts: shortlist favourites and reject the rest.",
+    description: "Review the concepts: approve favourites, refine one, or reject the rest.",
     tone: "attention",
     busy: false,
     stage: 1,
@@ -51,14 +51,14 @@ export const STATUS_META: Record<ProjectStatus, StatusMeta> = {
   },
   FINALIZING: {
     label: "Finalizing",
-    description: "Locking the approved design as the master image.",
+    description: "The approved design is locked as the canonical master. The four views start next.",
     tone: "working",
     busy: true,
     stage: 3,
   },
   GENERATING_VIEWS: {
     label: "Generating views",
-    description: "Producing front, back, left and right views of the final design.",
+    description: "Front, back, left and right views of the same approved object, each generated from the master design.",
     tone: "working",
     busy: true,
     stage: 4,
@@ -72,7 +72,7 @@ export const STATUS_META: Record<ProjectStatus, StatusMeta> = {
   },
   UPLOADING_TO_DRIVE: {
     label: "Uploading",
-    description: "Delivering the approved images to Google Drive.",
+    description: "All four views are approved. The design package is being delivered to Google Drive.",
     tone: "working",
     busy: true,
     stage: 5,

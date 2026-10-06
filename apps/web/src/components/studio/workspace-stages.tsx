@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CloudUpload, Plus, RotateCcw, Sparkles } from "lucide-react";
+import { Check, Plus, RotateCcw, Sparkles } from "lucide-react";
 import { useState } from "react";
 import type { ConceptDTO, FinalViewsDTO, ProjectDTO, RevisionDTO } from "@/lib/api/types";
 import { STATUS_META } from "@/lib/workflow-ui";
@@ -8,7 +8,9 @@ import type { ViewType } from "@/server/domain/workflow-states";
 import { Button } from "@/components/ui/button";
 import { DesignImage } from "@/components/ui/design-image";
 import { ApprovalDialog } from "./approval-dialog";
+import type { ConceptCardActions } from "./concept-card";
 import { ConceptGallery } from "./concept-gallery";
+import { DeliveryList, DeliveryProgress, DriveFolderReference } from "./delivery";
 import { ErrorState } from "./error-state";
 import { FinalViewGrid } from "./final-view-grid";
 import { GenerationStatus } from "./generation-status";
@@ -44,27 +46,39 @@ export function GeneratingStage({
   revisions,
   startedAt,
   onOpen,
+  actions,
 }: {
   project: ProjectDTO;
   concepts: ConceptDTO[];
   revisions: RevisionDTO[];
   startedAt: string;
   onOpen: (id: string) => void;
+  actions: ConceptCardActions;
 }) {
   const requested = project.requestedConceptCount ?? 3;
+  // Concepts of this run arrive together once Claude has written them; each image follows on its own.
+  const batch = concepts.filter((c) => c.createdAt >= startedAt);
+  const rendered = batch.filter((c) => c.status !== "GENERATING").length;
+  const writing = batch.length === 0;
   return (
     <div className="flex flex-col gap-6">
       <GenerationStatus
-        title="Generating concepts…"
-        description={STATUS_META.GENERATING_CONCEPTS.description}
+        title={writing ? "Writing concepts…" : "Rendering concept images…"}
+        description={
+          writing
+            ? STATUS_META.GENERATING_CONCEPTS.description
+            : "Each concept gets its own image. They appear one by one; a failed image can be retried without touching the others."
+        }
         startedAt={startedAt}
-        progressLabel={`${requested} concepts`}
+        progressLabel={writing ? `${requested} concepts` : `${rendered} of ${batch.length} images`}
+        progress={writing ? undefined : rendered / Math.max(1, batch.length)}
       />
       <ConceptGallery
         concepts={concepts}
         revisions={revisions}
-        placeholders={Math.max(0, requested - concepts.filter((c) => c.status !== "FAILED").length)}
+        placeholders={Math.max(0, requested - batch.length)}
         onOpen={onOpen}
+        actions={actions}
       />
     </div>
   );
@@ -80,6 +94,7 @@ export function ConceptsStage({
   onOpen,
   onGenerateMore,
   pendingMore,
+  actions,
 }: {
   project: ProjectDTO;
   concepts: ConceptDTO[];
@@ -88,11 +103,21 @@ export function ConceptsStage({
   onOpen: (id: string) => void;
   onGenerateMore: () => void;
   pendingMore: boolean;
+  actions: ConceptCardActions;
 }) {
   const refining = project.status === "REFINING";
-  const shortlisted = concepts.filter((c) => c.status === "SELECTED").length;
-  const rejected = concepts.filter((c) => c.status === "REJECTED").length;
-  const visible = concepts.filter((c) => c.status !== "FAILED");
+  const count = (status: ConceptDTO["status"]) => concepts.filter((c) => c.status === status).length;
+  const approved = count("SELECTED");
+  const rejected = count("REJECTED");
+  const failed = count("FAILED");
+  const summary = [
+    `${concepts.length} ${concepts.length === 1 ? "idea" : "ideas"}`,
+    approved ? `${approved} approved` : null,
+    rejected ? `${rejected} rejected` : null,
+    failed ? `${failed} ${failed === 1 ? "image" : "images"} to retry` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div className="flex flex-col gap-6">
       {refining ? (
@@ -102,9 +127,7 @@ export function ConceptsStage({
         <div className="flex flex-col gap-1">
           <h2 className="text-headline text-ink">Concepts</h2>
           <p className="text-callout text-ink-2">
-            {visible.length} {visible.length === 1 ? "idea" : "ideas"}
-            {shortlisted ? ` · ${shortlisted} shortlisted` : ""}
-            {rejected ? ` · ${rejected} rejected` : ""}. Open one to read its full direction.
+            {summary}. Approve the directions you like, refine one, or open it for its full direction.
           </p>
         </div>
         <Button
@@ -117,42 +140,79 @@ export function ConceptsStage({
           More ideas
         </Button>
       </div>
-      <ConceptGallery concepts={visible} revisions={revisions} onOpen={onOpen} />
+      <ConceptGallery concepts={concepts} revisions={revisions} onOpen={onOpen} actions={actions} />
     </div>
   );
 }
 
 /* ---------------------------------------------------------------- finalizing → views → delivery */
 
+const versionLabel = (n: number) => (n === 0 ? "Revision 0 (original)" : `Revision ${n}`);
+
+/** The canonical design every view is generated from. It never changes after finalizing. */
 function MasterDesign({ finalViews, compact }: { finalViews: FinalViewsDTO; compact?: boolean }) {
   const design = finalViews.finalDesign;
   if (!design) return null;
   return (
-    <section aria-labelledby="final-design-heading" className={compact ? "flex items-center gap-4" : "flex flex-col gap-3"}>
+    <section
+      aria-labelledby="final-design-heading"
+      className={
+        compact
+          ? "flex items-start gap-4 rounded-[var(--radius-card)] border border-hairline bg-surface p-4"
+          : "flex flex-col gap-4"
+      }
+    >
       <DesignImage
         src={design.masterImage}
-        alt="Approved final design"
-        className={compact ? "w-24 shrink-0 sm:w-28" : "max-w-xl"}
-        sizes={compact ? "7rem" : "(min-width: 1024px) 36rem, 100vw"}
+        alt="Canonical master design"
+        className={compact ? "w-20 shrink-0 sm:w-40" : "max-w-xl"}
+        sizes={compact ? "(min-width: 640px) 10rem, 5rem" : "(min-width: 1024px) 36rem, 100vw"}
         priority
       />
-      <div className="flex flex-col gap-1">
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <p className="text-eyebrow text-ink-3">Canonical design</p>
         <h2 id="final-design-heading" className="text-headline text-ink">
-          Final design
+          {String(design.conceptNumber).padStart(2, "0")} · {design.conceptTitle}
         </h2>
-        <p className="text-callout text-ink-2">
-          {design.status === "FINALIZED" ? "Approved master image. Views are generated from it." : "Being locked as the master image."}
+        <p className="text-caption text-ink-3">
+          {versionLabel(design.approvedRevisionNumber)} · finalized. The master design never changes; every view is generated from it.
         </p>
+        {design.designSummary ? <p className="text-callout text-ink-2">{design.designSummary}</p> : null}
+        {design.invariants.length ? (
+          <ul className="mt-1 flex flex-wrap gap-1.5" aria-label="Kept identical in every view">
+            {design.invariants.map((item) => (
+              <li key={item} className="rounded-full bg-sunken px-2.5 py-0.5 text-caption text-ink-2">
+                {item}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
     </section>
   );
 }
 
-export function FinalizingStage({ finalViews, startedAt }: { finalViews: FinalViewsDTO; startedAt: string }) {
+export function FinalizingStage({
+  finalViews,
+  startedAt,
+  onStartViews,
+  pending,
+}: {
+  finalViews: FinalViewsDTO;
+  startedAt: string;
+  onStartViews: () => void;
+  pending: boolean;
+}) {
   return (
     <div className="flex flex-col gap-6">
-      <GenerationStatus title="Finalizing the design" description={STATUS_META.FINALIZING.description} startedAt={startedAt} />
-      <MasterDesign finalViews={finalViews} />
+      <GenerationStatus title="Design finalized" description={STATUS_META.FINALIZING.description} startedAt={startedAt} />
+      <MasterDesign finalViews={finalViews} compact />
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-callout text-ink-2">Views didn&apos;t start after a few seconds?</p>
+        <Button variant="secondary" size="sm" onClick={onStartViews} loading={pending} icon={<RotateCcw className="size-3.5" />}>
+          Start the four views
+        </Button>
+      </div>
     </div>
   );
 }
@@ -162,39 +222,62 @@ export function ViewsStage({
   finalViews,
   startedAt,
   isRunning,
+  busy,
   actions,
 }: {
   project: ProjectDTO;
   finalViews: FinalViewsDTO;
   startedAt: string;
   isRunning: (key: string) => boolean;
+  busy: boolean;
   actions: {
-    approveView: (viewId: string) => ReturnType<Run>;
     regenerateView: (viewType: ViewType) => ReturnType<Run>;
+    retryFailedViews: () => ReturnType<Run>;
+    approveAll: () => ReturnType<Run>;
     deliver: () => ReturnType<Run>;
   };
 }) {
   const [confirming, setConfirming] = useState(false);
   const status = project.status;
   const views = finalViews.views;
-  const ready = views.filter((v) => v.status === "READY" || v.status === "APPROVED").length;
-  const approved = views.filter((v) => v.status === "APPROVED").length;
+  const count = (s: string[]) => views.filter((v) => s.includes(v.status)).length;
+  const ready = count(["READY", "APPROVED"]);
+  const failed = count(["FAILED"]);
+  const running = count(["GENERATING"]) + (4 - views.length);
+  const generating = status === "GENERATING_VIEWS";
   const reviewing = status === "VIEW_REVIEW";
-  const allGood = ready === 4;
+  const uploading = status === "UPLOADING_TO_DRIVE";
 
   return (
     <div className="flex flex-col gap-8">
-      {status === "GENERATING_VIEWS" ? (
+      {generating && running > 0 ? (
         <GenerationStatus
-          title="Generating views"
+          title="Generating the four views"
           description={STATUS_META.GENERATING_VIEWS.description}
           startedAt={startedAt}
           progressLabel={`${ready} of 4 ready`}
           progress={ready / 4}
         />
       ) : null}
-      {status === "UPLOADING_TO_DRIVE" ? (
-        <GenerationStatus title="Delivering to Google Drive" description={STATUS_META.UPLOADING_TO_DRIVE.description} startedAt={startedAt} />
+      {generating && running === 0 && failed > 0 ? (
+        <ErrorState
+          variant="inline"
+          title={failed === 1 ? "1 of the 4 views couldn't be generated" : `${failed} of the 4 views couldn't be generated`}
+          message="The successful views are kept. Only the failed ones are generated again, from the master design."
+          actions={
+            <Button size="sm" onClick={() => void actions.retryFailedViews()} loading={isRunning("retry-views")} disabled={busy} icon={<RotateCcw className="size-3.5" />}>
+              Retry failed {failed === 1 ? "view" : "views"}
+            </Button>
+          }
+        />
+      ) : null}
+      {uploading ? (
+        <DeliveryProgress
+          delivery={finalViews.delivery}
+          onRetry={() => void actions.deliver()}
+          pending={isRunning("deliver")}
+          busy={busy}
+        />
       ) : null}
 
       <MasterDesign finalViews={finalViews} compact />
@@ -207,43 +290,39 @@ export function ViewsStage({
             </h2>
             <p className="text-callout text-ink-2">
               {reviewing
-                ? `${approved} of 4 approved. Approve each view or regenerate the ones that aren't right.`
-                : "Front, back, left and right, generated from the final design."}
+                ? "The same object from each side. Regenerate any view that isn't right, then approve all four."
+                : "Front, back, left and right of the canonical design. Only the viewpoint changes."}
             </p>
           </div>
           {reviewing ? (
-            <Button
-              size="lg"
-              onClick={() => setConfirming(true)}
-              disabled={!allGood}
-              icon={<CloudUpload className="size-4" />}
-            >
-              Approve & deliver
+            <Button size="lg" onClick={() => setConfirming(true)} disabled={ready !== 4 || busy} icon={<Check className="size-4" />}>
+              Approve all views
             </Button>
           ) : null}
         </div>
         <FinalViewGrid
           views={views}
-          reviewing={reviewing}
-          onApprove={(id) => void actions.approveView(id)}
+          canRegenerate={reviewing}
+          canRetry={generating}
           onRegenerate={(type) => void actions.regenerateView(type)}
           isRunning={isRunning}
+          disabled={busy}
         />
       </section>
 
       <ApprovalDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title="Approve all views and deliver?"
-        description="All four views are approved and uploaded with the final design to Google Drive, where the 3D modeling step picks them up. This completes the design phase."
-        confirmLabel="Approve & deliver"
-        pending={isRunning("deliver")}
+        title="Approve all four views?"
+        description="The final design and its front, back, left and right views are approved together and handed over for delivery to Google Drive, where the 3D modelling step picks them up."
+        confirmLabel="Approve all views"
+        pending={isRunning("approve-all")}
         onConfirm={async () => {
-          if (await actions.deliver()) setConfirming(false);
+          if (await actions.approveAll()) setConfirming(false);
         }}
       >
         <ul className="flex flex-col gap-1.5 text-callout text-ink-2">
-          {["Final design (master image)", "Front, back, left and right views", "Design details (manifest)"].map((item) => (
+          {["Canonical master design", "Front, back, left and right views", "Design details"].map((item) => (
             <li key={item} className="flex items-center gap-2">
               <Check className="size-4 text-success" strokeWidth={2.5} aria-hidden="true" />
               {item}
@@ -258,21 +337,66 @@ export function ViewsStage({
 /* ---------------------------------------------------------------- completed */
 
 export function CompletedStage({ project, finalViews }: { project: ProjectDTO; finalViews: FinalViewsDTO }) {
+  const design = finalViews.finalDesign;
+  const completedAt = finalViews.delivery.run?.finishedAt ?? project.finalizedAt;
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex items-start gap-4 rounded-[var(--radius-card)] border border-success/25 bg-success-soft p-5">
-        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-success text-white">
-          <Check className="size-4" strokeWidth={3} aria-hidden="true" />
+      <div className="flex items-start gap-4 rounded-[var(--radius-card)] border border-success/25 bg-success-soft p-5" role="status">
+        <span className="grid size-10 shrink-0 place-items-center rounded-full bg-success text-white">
+          <Check className="size-5" strokeWidth={3} aria-hidden="true" />
         </span>
         <div className="flex flex-col gap-1">
-          <p className="text-headline text-ink">Delivered to Google Drive</p>
+          <h2 className="text-title text-ink">Design package completed.</h2>
           <p className="text-callout text-ink-2">
-            {project.projectName} is complete. The final design and its four views are ready for 3D modeling.
+            The canonical design, its four views and project.json are in Google Drive, ready for 3D modelling.
           </p>
         </div>
       </div>
-      <MasterDesign finalViews={finalViews} />
-      <FinalViewGrid views={finalViews.views} />
+
+      <section aria-labelledby="views-heading" className="flex flex-col gap-4">
+        <h2 id="views-heading" className="text-headline text-ink">
+          Final four views
+        </h2>
+        <FinalViewGrid views={finalViews.views} />
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+        <section aria-labelledby="project-info-heading" className="flex flex-col gap-4 rounded-[var(--radius-card)] border border-hairline bg-surface p-5">
+          <h2 id="project-info-heading" className="text-eyebrow text-ink-3">
+            Project
+          </h2>
+          <dl className="grid gap-3 text-callout sm:grid-cols-2">
+            <Info label="Project" value={project.projectName} />
+            <Info label="Client" value={project.clientName} />
+            {design ? (
+              <Info
+                label="Approved design"
+                value={`${String(design.conceptNumber).padStart(2, "0")} · ${design.conceptTitle} · ${versionLabel(design.approvedRevisionNumber)}`}
+              />
+            ) : null}
+            {completedAt ? <Info label="Completed" value={new Date(completedAt).toLocaleString()} /> : null}
+          </dl>
+          <div className="flex flex-col gap-1">
+            <p className="text-eyebrow text-ink-3">Design brief</p>
+            <p className="whitespace-pre-line text-callout text-ink-2">{project.designBrief}</p>
+          </div>
+        </section>
+        <div className="flex flex-col gap-4">
+          <DriveFolderReference delivery={finalViews.delivery} />
+          <DeliveryList items={finalViews.delivery.items} compact />
+        </div>
+      </div>
+
+      <MasterDesign finalViews={finalViews} compact />
+    </div>
+  );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <dt className="text-caption text-ink-3">{label}</dt>
+      <dd className="truncate text-ink">{value}</dd>
     </div>
   );
 }
@@ -316,7 +440,7 @@ export function FailedStage({
       ) : concepts.some((c) => c.imageUrl) ? (
         <section className="flex flex-col gap-4" aria-label="Existing concepts">
           <h2 className="text-headline text-ink">Concepts so far</h2>
-          <ConceptGallery concepts={concepts.filter((c) => c.status !== "FAILED")} revisions={revisions} onOpen={onOpen} />
+          <ConceptGallery concepts={concepts} revisions={revisions} onOpen={onOpen} />
         </section>
       ) : null}
     </div>

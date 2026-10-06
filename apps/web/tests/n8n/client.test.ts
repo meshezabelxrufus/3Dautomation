@@ -93,14 +93,14 @@ describe("n8n concepts-generate client", () => {
     reply = { status: 202, body: { project_id: ok.project_id, status: "GENERATING_CONCEPTS", accepted: true, concept_count: 4 } };
     const r = await generateConceptsViaN8n(
       { projectId: ok.project_id, conceptCount: 4 },
-      { config: config(), generation: { provider_mode: "live", model: "claude-sonnet-5-5", effort: "high" } },
+      { config: config(), generation: { provider_mode: "live", model: "claude-sonnet-5-5", effort: "high", image_model: "gemini-3.1-flash-image" } },
     );
     expect(r).toEqual({ projectId: ok.project_id, conceptCount: 4 });
     expect(last.url).toBe(`/webhook/${CONCEPTS_GENERATE_WEBHOOK}`);
     expect(last.body).toEqual({
       project_id: ok.project_id,
       concept_count: 4,
-      config: { provider_mode: "live", model: "claude-sonnet-5-5", effort: "high" },
+      config: { provider_mode: "live", model: "claude-sonnet-5-5", effort: "high", image_model: "gemini-3.1-flash-image" },
     });
   });
 
@@ -116,10 +116,81 @@ describe("n8n concepts-generate client", () => {
 
   it("derives generation config from env; mock scenarios only in mock mode", async () => {
     const { conceptConfigFromEnv } = await import("@/server/n8n/concepts");
-    expect(conceptConfigFromEnv({} as NodeJS.ProcessEnv)).toEqual({ provider_mode: "live", model: "claude-sonnet-5-5", effort: "high" });
+    expect(conceptConfigFromEnv({} as NodeJS.ProcessEnv)).toEqual({
+      provider_mode: "live",
+      model: "claude-sonnet-5-5",
+      effort: "high",
+      image_model: "gemini-3.1-flash-image",
+    });
+    expect(conceptConfigFromEnv({ AI_IMAGE_MOCK_SCENARIO: "fail:2" } as unknown as NodeJS.ProcessEnv)).not.toHaveProperty("image_mock_scenario");
     expect(conceptConfigFromEnv({ AI_PROVIDER_MODE: "live", AI_MOCK_SCENARIO: "refusal" } as unknown as NodeJS.ProcessEnv)).not.toHaveProperty("mock_scenario");
     expect(
       conceptConfigFromEnv({ AI_PROVIDER_MODE: "mock", AI_MOCK_SCENARIO: "refusal", CLAUDE_EFFORT: "max" } as unknown as NodeJS.ProcessEnv),
     ).toMatchObject({ provider_mode: "mock", mock_scenario: "refusal", effort: "max" });
+  });
+});
+
+describe("n8n image and refine clients", () => {
+  const gen = { provider_mode: "mock" as const, model: "claude-sonnet-5-5", effort: "high" as const, image_model: "gemini-3.1-flash-image", image_mock_scenario: "fail:2" };
+  const conceptId = "0b0e7a52-6d4c-4c39-9a53-1d7c1b1f0a01";
+
+  it("retries one concept image with retry: true and only image settings", async () => {
+    const { retryConceptImageViaN8n, CONCEPT_IMAGE_WEBHOOK } = await import("@/server/n8n/images");
+    reply = { status: 202, body: { concept_id: conceptId, status: "GENERATING", accepted: true } };
+    await retryConceptImageViaN8n(conceptId, { config: config(), generation: gen });
+    expect(last.url).toBe(`/webhook/${CONCEPT_IMAGE_WEBHOOK}`);
+    expect(last.body).toEqual({
+      concept_id: conceptId,
+      retry: true,
+      config: { provider_mode: "mock", image_model: "gemini-3.1-flash-image", image_mock_scenario: "fail:2" },
+    });
+  });
+
+  it("maps 'already running' to a rejection with its code", async () => {
+    const { retryConceptImageViaN8n } = await import("@/server/n8n/images");
+    reply = { status: 409, body: { error: { code: "image_in_progress", message: "busy" } } };
+    const err = await retryConceptImageViaN8n(conceptId, { config: config(), generation: gen }).catch((e) => e);
+    expect(err).toBeInstanceOf(N8nRejectedError);
+    expect(err.code).toBe("image_in_progress");
+  });
+
+  it("starts a refinement with project, concept and revision ids", async () => {
+    const { startRefinementViaN8n, CONCEPT_REFINE_WEBHOOK } = await import("@/server/n8n/images");
+    const job = { projectId: ok.project_id, conceptId, revisionId: "5d7c2f3e-9b8a-4c1d-8e2f-3a4b5c6d7e8f" };
+    reply = { status: 202, body: { revision_id: job.revisionId, status: "GENERATING", accepted: true } };
+    await startRefinementViaN8n(job, { config: config(), generation: gen });
+    expect(last.url).toBe(`/webhook/${CONCEPT_REFINE_WEBHOOK}`);
+    expect(last.body).toMatchObject({
+      project_id: ok.project_id,
+      concept_id: conceptId,
+      revision_id: job.revisionId,
+      config: { image_model: "gemini-3.1-flash-image" },
+    });
+    reply = { status: 202, body: { ok: true } };
+    await expect(startRefinementViaN8n(job, { config: config(), generation: gen })).rejects.toBeInstanceOf(N8nContractError);
+  });
+});
+
+describe("n8n views client", () => {
+  const projectId = "8f096623-3889-44d5-9eb3-325ab1861850";
+  const finalDesignId = "1b6f0f0e-5f4c-4d8e-9a3b-2c1d0e9f8a7b";
+
+  it("starts views for the final design, all or exactly the requested ones", async () => {
+    const { generateViewsViaN8n, VIEWS_GENERATE_WEBHOOK } = await import("@/server/n8n/views");
+    reply = { status: 202, body: { project_id: projectId, final_design_id: finalDesignId, view_types: ["BACK"], status: "GENERATING_VIEWS", accepted: true } };
+    const r = await generateViewsViaN8n({ projectId, finalDesignId, viewTypes: ["BACK"] }, { config: config() });
+    expect(r.viewTypes).toEqual(["BACK"]);
+    expect(last.url).toBe(`/webhook/${VIEWS_GENERATE_WEBHOOK}`);
+    expect(last.body).toMatchObject({ project_id: projectId, final_design_id: finalDesignId, view_types: ["BACK"] });
+    await generateViewsViaN8n({ projectId, finalDesignId }, { config: config() });
+    expect(last.body).toMatchObject({ view_types: [] });
+  });
+
+  it("surfaces 'already running' as a rejection with its code", async () => {
+    const { generateViewsViaN8n } = await import("@/server/n8n/views");
+    reply = { status: 409, body: { error: { code: "views_in_progress", message: "busy" } } };
+    await expect(generateViewsViaN8n({ projectId, finalDesignId }, { config: config() })).rejects.toMatchObject({ code: "views_in_progress" });
+    reply = { status: 202, body: { accepted: true } };
+    await expect(generateViewsViaN8n({ projectId, finalDesignId }, { config: config() })).rejects.toBeInstanceOf(N8nContractError);
   });
 });

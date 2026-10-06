@@ -1,17 +1,26 @@
 import { cn } from "@/lib/cn";
+import { Spinner } from "@/components/ui/spinner";
+
+const NOTES = {
+  pending: "Image pending",
+  rendering: "Rendering image",
+  failed: "Image failed",
+} as const;
 
 /**
  * Stand-in visual for a concept that exists as structured design direction but has no
- * image yet. Reads as a drafting sheet, not a broken image.
+ * image yet (or its image failed). Reads as a drafting sheet, not a broken image.
  */
 export function ConceptSheet({
   number,
   shapeLanguage,
   size = "card",
+  note = "pending",
 }: {
   number: number;
   shapeLanguage: string | null;
   size?: "card" | "detail";
+  note?: keyof typeof NOTES;
 }) {
   return (
     <div
@@ -38,9 +47,22 @@ export function ConceptSheet({
           {shapeLanguage}
         </p>
       ) : null}
-      <span className="relative inline-flex w-fit items-center gap-1.5 rounded-full border border-hairline bg-surface px-2.5 py-1 text-caption text-ink-3">
-        <span className="size-1.5 rounded-full bg-ink-3/60" aria-hidden="true" />
-        Image pending
+      {note === "rendering" ? (
+        <span aria-hidden="true" className="absolute inset-0 animate-pulse bg-accent/[0.05] motion-reduce:animate-none" />
+      ) : null}
+      <span
+        role={note === "rendering" ? "status" : undefined}
+        className={cn(
+          "relative inline-flex w-fit items-center gap-1.5 rounded-full border bg-surface px-2.5 py-1 text-caption",
+          note === "failed" ? "border-danger/30 text-danger" : "border-hairline text-ink-3",
+        )}
+      >
+        {note === "rendering" ? (
+          <Spinner className="text-[0.7rem]" />
+        ) : (
+          <span className={cn("size-1.5 rounded-full", note === "failed" ? "bg-danger" : "bg-ink-3/60")} aria-hidden="true" />
+        )}
+        {NOTES[note]}
       </span>
     </div>
   );

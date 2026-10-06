@@ -12,10 +12,23 @@ type RefinementInputProps = {
   pending?: boolean;
   /** When set, the input is disabled and this explains why. */
   disabledReason?: string | null;
+  autoFocus?: boolean;
+  label?: string;
+  /** Shown under the field when there's nothing more urgent to say. */
+  hint?: string;
+  textareaRef?: React.Ref<HTMLTextAreaElement>;
 };
 
 /** Natural-language change request for one concept ("thinner ring, matte black"). */
-export function RefinementInput({ onSubmit, pending, disabledReason }: RefinementInputProps) {
+export function RefinementInput({
+  onSubmit,
+  pending,
+  disabledReason,
+  autoFocus,
+  label = "Refine this concept",
+  hint,
+  textareaRef,
+}: RefinementInputProps) {
   const id = useId();
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -39,10 +52,11 @@ export function RefinementInput({ onSubmit, pending, disabledReason }: Refinemen
         void submit();
       }}
     >
-      <label htmlFor={id} className="text-eyebrow text-ink-3">
-        Refine this concept
+      <label htmlFor={id} className="text-headline text-ink">
+        {label}
       </label>
       <textarea
+        ref={textareaRef}
         id={id}
         value={value}
         onChange={(e) => {
@@ -57,20 +71,24 @@ export function RefinementInput({ onSubmit, pending, disabledReason }: Refinemen
         }}
         rows={3}
         maxLength={1000}
+        autoFocus={autoFocus}
         disabled={disabled}
         aria-invalid={error ? true : undefined}
         aria-describedby={`${id}-help`}
-        placeholder="e.g. Sharper edges and a matte black finish. Keep the overall shape and pose."
+        placeholder="e.g. Make the horns smaller, make the body more mechanical, and make the face slightly more aggressive."
         className={cn(inputClasses, "resize-none py-3 leading-relaxed disabled:opacity-60")}
       />
       <div className="flex items-center justify-between gap-3">
         <p id={`${id}-help`} className={cn("text-caption", error ? "text-danger" : "text-ink-3")} role={error ? "alert" : undefined}>
-          {error ?? disabledReason ?? "Describe what to change and what to keep. ⌘/Ctrl + Enter to send."}
+          {error ?? disabledReason ?? hint ?? "Describe what to change. Everything you don't mention stays the same."}
         </p>
         <Button type="submit" size="sm" loading={pending} disabled={disabled} icon={<Send className="size-3.5" />}>
           Refine
         </Button>
       </div>
+      <p className="text-caption text-ink-3" aria-hidden="true">
+        ⌘/Ctrl + Enter to send
+      </p>
     </form>
   );
 }

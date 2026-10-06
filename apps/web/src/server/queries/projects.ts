@@ -4,12 +4,16 @@
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { DbExecutor } from "@/db/client";
 import {
+  assets,
   concepts,
+  driveExports,
+  driveItems,
   finalDesigns,
   finalViews,
   projectEvents,
   projects,
   revisions,
+  type Asset,
   type Concept,
   type Project,
 } from "@/db/schema";
@@ -17,6 +21,7 @@ import { VIEW_TYPES } from "@/server/domain/workflow-states";
 import { statusMeta } from "@/lib/workflow-ui";
 import type {
   ConceptDTO,
+  DeliveryDTO,
   FinalViewsDTO,
   ProjectDTO,
   ProjectStatusDTO,
@@ -42,7 +47,7 @@ function toSummary(p: Project, coverImageUrl: string | null, conceptCount: numbe
   };
 }
 
-function toConcept(c: Concept): ConceptDTO {
+function toConcept(c: Concept, a: Asset | null): ConceptDTO {
   return {
     id: c.id,
     projectId: c.projectId,
@@ -56,6 +61,12 @@ function toConcept(c: Concept): ConceptDTO {
     materials: c.materials,
     generationPrompt: c.generationPrompt,
     imageUrl: c.imageUrl,
+    imageError: c.status === "FAILED" ? c.imageError : null,
+    imageRequestedAt: isoOrNull(c.imageRequestedAt),
+    image: a
+      ? { model: a.model, provider: a.provider, width: a.width, height: a.height, createdAt: iso(a.createdAt) }
+      : null,
+    activeRevisionId: c.activeRevisionId,
     status: c.status,
     createdAt: iso(c.createdAt),
     updatedAt: iso(c.updatedAt),
@@ -120,18 +131,25 @@ export async function getProjectStatus(db: DbExecutor, projectId: string): Promi
     failure_reason: string | null;
     updated_at: string;
     change_token: string;
+    images_pending: number;
+    revisions_pending: number;
   }>(sql`
     select
       p.status,
       p.failure_reason,
       p.updated_at::text as updated_at,
+      (select count(*)::int from ${concepts} c where c.project_id = p.id and c.status = 'GENERATING') as images_pending,
+      (select count(*)::int from ${revisions} r join ${concepts} c on c.id = r.concept_id
+         where c.project_id = p.id and r.status = 'GENERATING') as revisions_pending,
       concat_ws(':',
         extract(epoch from greatest(
           p.updated_at,
           (select max(c.updated_at) from ${concepts} c where c.project_id = p.id),
           (select max(r.created_at) from ${revisions} r join ${concepts} c on c.id = r.concept_id where c.project_id = p.id),
           (select max(coalesce(d.finalized_at, d.created_at)) from ${finalDesigns} d where d.project_id = p.id),
-          (select max(v.updated_at) from ${finalViews} v where v.project_id = p.id)
+          (select max(v.updated_at) from ${finalViews} v where v.project_id = p.id),
+          (select max(i.updated_at) from ${driveItems} i where i.project_id = p.id),
+          (select max(coalesce(x.finished_at, x.started_at)) from ${driveExports} x where x.project_id = p.id)
         ))::text,
         (select coalesce(max(e.id), 0) from ${projectEvents} e where e.project_id = p.id)::text,
         (select count(*) from ${revisions} r join ${concepts} c on c.id = r.concept_id
@@ -146,7 +164,8 @@ export async function getProjectStatus(db: DbExecutor, projectId: string): Promi
     projectId,
     status: row.status,
     failureReason: row.failure_reason,
-    isBusy: statusMeta(row.status).busy,
+    isBusy: statusMeta(row.status).busy || Number(row.images_pending) > 0 || Number(row.revisions_pending) > 0,
+    imagesPending: Number(row.images_pending),
     changeToken: row.change_token,
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -154,44 +173,59 @@ export async function getProjectStatus(db: DbExecutor, projectId: string): Promi
 
 export async function getConcepts(db: DbExecutor, projectId: string): Promise<ConceptDTO[]> {
   const rows = await db
-    .select()
+    .select({ c: concepts, a: assets })
     .from(concepts)
+    .leftJoin(assets, eq(assets.id, concepts.imageAssetId))
     .where(eq(concepts.projectId, projectId))
     .orderBy(asc(concepts.conceptNumber));
-  return rows.map(toConcept);
+  return rows.map(({ c, a }) => toConcept(c, a));
 }
 
-function summarizeInterpretation(value: Record<string, unknown> | null): string[] | null {
-  const changes = value?.changes;
-  if (Array.isArray(changes) && changes.every((c) => typeof c === "string")) return changes as string[];
-  return null;
+function stringList(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((c) => typeof c === "string") ? (value as string[]) : null;
 }
+
+const interpretationText = (value: Record<string, unknown> | null) =>
+  typeof value?.summary === "string" ? value.summary : null;
 
 /** All revisions of all concepts in the project, oldest first per concept. */
 export async function getRevisions(db: DbExecutor, projectId: string): Promise<RevisionDTO[]> {
   const rows = await db
-    .select({ r: revisions })
+    .select({ r: revisions, activeRevisionId: concepts.activeRevisionId })
     .from(revisions)
     .innerJoin(concepts, eq(concepts.id, revisions.conceptId))
     .where(eq(concepts.projectId, projectId))
     .orderBy(asc(concepts.conceptNumber), asc(revisions.revisionNumber));
-  return rows.map(({ r }) => ({
-    id: r.id,
-    conceptId: r.conceptId,
-    revisionNumber: r.revisionNumber,
-    clientFeedback: r.clientFeedback,
-    interpretationSummary: summarizeInterpretation(r.interpretedInstruction ?? null),
-    imageUrl: r.imageUrl,
-    status: r.status,
-    createdAt: iso(r.createdAt),
-  }));
+  const newest = new Map<string, number>();
+  for (const { r } of rows) newest.set(r.conceptId, Math.max(newest.get(r.conceptId) ?? 0, r.revisionNumber));
+  return rows.map(({ r, activeRevisionId }) => {
+    const ii = r.interpretedInstruction ?? null;
+    return {
+      id: r.id,
+      conceptId: r.conceptId,
+      revisionNumber: r.revisionNumber,
+      baseRevisionId: r.baseRevisionId,
+      clientFeedback: r.clientFeedback,
+      interpretationSummary: stringList(ii?.changes),
+      interpretation: interpretationText(ii),
+      preserved: stringList(ii?.preserve),
+      generationPrompt: r.generationPrompt,
+      imageUrl: r.imageUrl,
+      errorReason: r.status === "FAILED" ? r.errorReason : null,
+      retryable: r.status === "FAILED" && newest.get(r.conceptId) === r.revisionNumber && r.baseRevisionId === activeRevisionId,
+      status: r.status,
+      createdAt: iso(r.createdAt),
+    };
+  });
 }
 
 /** The live final design (if any) and the current version of each view, in FRONT/BACK/LEFT/RIGHT order. */
 export async function getFinalViews(db: DbExecutor, projectId: string): Promise<FinalViewsDTO> {
-  const [design] = await db
-    .select()
+  const [row] = await db
+    .select({ d: finalDesigns, c: concepts, revisionNumber: revisions.revisionNumber })
     .from(finalDesigns)
+    .innerJoin(concepts, eq(concepts.id, finalDesigns.approvedConceptId))
+    .leftJoin(revisions, eq(revisions.id, finalDesigns.approvedRevisionId))
     .where(and(eq(finalDesigns.projectId, projectId), ne(finalDesigns.status, "CANCELLED")))
     .orderBy(desc(finalDesigns.createdAt))
     .limit(1);
@@ -200,16 +234,24 @@ export async function getFinalViews(db: DbExecutor, projectId: string): Promise<
     .from(finalViews)
     .where(and(eq(finalViews.projectId, projectId), eq(finalViews.isCurrent, true)));
   views.sort((a, b) => VIEW_TYPES.indexOf(a.viewType) - VIEW_TYPES.indexOf(b.viewType));
+  const prompts = row?.d.viewPrompts ?? null;
   return {
-    finalDesign: design
+    delivery: await getDelivery(db, projectId),
+    finalDesign: row
       ? {
-          id: design.id,
-          approvedConceptId: design.approvedConceptId,
-          approvedRevisionId: design.approvedRevisionId,
-          masterImage: design.masterImage,
-          status: design.status,
-          createdAt: iso(design.createdAt),
-          finalizedAt: isoOrNull(design.finalizedAt),
+          id: row.d.id,
+          approvedConceptId: row.d.approvedConceptId,
+          approvedRevisionId: row.d.approvedRevisionId,
+          approvedRevisionNumber: row.revisionNumber ?? 0,
+          conceptNumber: row.c.conceptNumber,
+          conceptTitle: row.c.title,
+          conceptDescription: row.c.description,
+          masterImage: row.d.masterImage,
+          status: row.d.status,
+          designSummary: typeof prompts?.design_summary === "string" ? prompts.design_summary : null,
+          invariants: stringList(prompts?.invariants) ?? [],
+          createdAt: iso(row.d.createdAt),
+          finalizedAt: isoOrNull(row.d.finalizedAt),
         }
       : null,
     views: views.map((v) => ({
@@ -217,10 +259,57 @@ export async function getFinalViews(db: DbExecutor, projectId: string): Promise<
       viewType: v.viewType,
       versionNumber: v.versionNumber,
       imageUrl: v.imageUrl,
+      generationPrompt: v.generationPrompt,
+      errorReason: v.status === "FAILED" ? v.errorReason : null,
       driveFileId: v.driveFileId,
       status: v.status,
       updatedAt: iso(v.updatedAt),
     })),
+  };
+}
+
+const PACKAGE_ORDER = ["file:MASTER", "file:FRONT", "file:BACK", "file:LEFT", "file:RIGHT", "file:METADATA"];
+
+/** Google Drive delivery state: latest run, project folder, and the package files. No credentials. */
+export async function getDelivery(db: DbExecutor, projectId: string): Promise<DeliveryDTO> {
+  const [run] = await db
+    .select()
+    .from(driveExports)
+    .where(eq(driveExports.projectId, projectId))
+    .orderBy(desc(driveExports.startedAt))
+    .limit(1);
+  const items = await db.select().from(driveItems).where(eq(driveItems.projectId, projectId));
+  const folder = items.find((i) => i.itemKey === "folder:project" && i.driveFileId);
+  const byKey = new Map(items.map((i) => [i.itemKey, i]));
+  const packageItems = PACKAGE_ORDER.map((key) => {
+    const i = byKey.get(key);
+    const name = key === "file:METADATA" ? "project.json" : `${key.slice(5)}.png`;
+    return {
+      key,
+      name: i?.name ?? name,
+      kind: "FILE" as const,
+      status: (i?.status ?? "PENDING") as "PENDING" | "DONE" | "FAILED",
+      error: i?.status === "FAILED" ? i.errorReason : null,
+      driveUrl: i?.status === "DONE" ? i.driveUrl : null,
+    };
+  });
+  const failedElsewhere = items
+    .filter((i) => i.status === "FAILED" && !PACKAGE_ORDER.includes(i.itemKey))
+    .map((i) => ({ key: i.itemKey, name: i.name, kind: i.kind as "FOLDER" | "FILE", status: "FAILED" as const, error: i.errorReason, driveUrl: null }));
+  return {
+    run: run
+      ? {
+          status: run.status as "RUNNING" | "COMPLETED" | "FAILED",
+          mode: run.mode as "live" | "test",
+          startedAt: iso(run.startedAt),
+          finishedAt: isoOrNull(run.finishedAt),
+          errorReason: run.errorReason,
+        }
+      : null,
+    folder: folder ? { name: folder.name, driveFileId: folder.driveFileId!, url: folder.driveUrl } : null,
+    items: [...packageItems, ...failedElsewhere],
+    done: items.filter((i) => i.status === "DONE").length,
+    total: items.length,
   };
 }
 
