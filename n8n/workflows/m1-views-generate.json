@@ -1,8 +1,8 @@
 {
-  "name": "[3D Studio] M1 · Concepts — generate",
+  "name": "[3D Studio] M1 · Views — generate",
   "nodes": [
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000001",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000001",
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
@@ -12,12 +12,12 @@
       ],
       "parameters": {
         "httpMethod": "POST",
-        "path": "3d-studio/concepts-generate",
+        "path": "3d-studio/views-generate",
         "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
-      "webhookId": "7f1c2b9a-4d3e-4f60-9b21-0a5c3d2e1f02",
+      "webhookId": "9a1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c08",
       "credentials": {
         "httpHeaderAuth": {
           "name": "3D Studio — Inbound webhook token"
@@ -25,7 +25,7 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000002",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000002",
       "name": "Validate request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -36,11 +36,11 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// Validates the request from the web app. Model/effort/provider are configuration, not secrets.\nconst body = $input.first().json.body ?? {};\nconst errors = {};\nconst projectId = typeof body.project_id === 'string' ? body.project_id.trim() : '';\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) errors.project_id = 'project_id must be a UUID.';\nconst count = body.concept_count === undefined ? 3 : Number(body.concept_count);\nif (!Number.isInteger(count) || count < 2 || count > 5) errors.concept_count = 'concept_count must be an integer from 2 to 5.';\nconst cfg = body.config && typeof body.config === 'object' ? body.config : {};\nconst providerMode = cfg.provider_mode === 'mock' ? 'mock' : 'live';\nconst config = {\n  provider_mode: providerMode,\n  model: typeof cfg.model === 'string' && /^claude-[a-z0-9.-]+$/.test(cfg.model) ? cfg.model : 'claude-sonnet-5-5',\n  effort: ['low', 'medium', 'high', 'xhigh', 'max'].includes(cfg.effort) ? cfg.effort : 'high',\n  mock_scenario: providerMode === 'mock' && typeof cfg.mock_scenario === 'string' ? cfg.mock_scenario : 'ok',\n  image_model: typeof cfg.image_model === 'string' && /^gemini-[a-z0-9.-]+$/.test(cfg.image_model) ? cfg.image_model : 'gemini-3.1-flash-image',\n  image_mock_scenario: providerMode === 'mock' && typeof cfg.image_mock_scenario === 'string' ? cfg.image_mock_scenario : 'ok',\n  image_provider: cfg.image_provider === 'pollinations' ? 'pollinations' : 'gemini',\n  pollinations_model: typeof cfg.pollinations_model === 'string' && /^[a-z0-9._-]+\\/[a-z0-9._-]+$/i.test(cfg.pollinations_model) ? cfg.pollinations_model : undefined,\n};\nreturn [{ json: { valid: Object.keys(errors).length === 0, errors, project_id: projectId, concept_count: count, config } }];"
+        "jsCode": "// Four views of the finalized design: first run, retry of failed views, or \"regenerate this view\".\nconst body = $input.first().json.body ?? {};\nconst errors = {};\nconst uuid = (v) => (typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.trim()) ? v.trim() : null);\nconst projectId = uuid(body.project_id);\nconst designId = uuid(body.final_design_id);\nif (!projectId) errors.project_id = 'project_id must be a UUID.';\nif (!designId) errors.final_design_id = 'final_design_id must be a UUID.';\nconst allowed = ['FRONT', 'BACK', 'LEFT', 'RIGHT'];\nconst viewTypes = Array.isArray(body.view_types) ? [...new Set(body.view_types)] : [];\nif (viewTypes.some((t) => !allowed.includes(t))) errors.view_types = 'view_types must be FRONT, BACK, LEFT or RIGHT.';\nconst cfg = body.config && typeof body.config === 'object' ? body.config : {};\nconst providerMode = cfg.provider_mode === 'mock' ? 'mock' : 'live';\nconst config = {\n  provider_mode: providerMode,\n  model: typeof cfg.model === 'string' && /^claude-[a-z0-9.-]+$/.test(cfg.model) ? cfg.model : 'claude-sonnet-5-5',\n  effort: ['low', 'medium', 'high', 'xhigh', 'max'].includes(cfg.effort) ? cfg.effort : 'high',\n  image_model: typeof cfg.image_model === 'string' && /^gemini-[a-z0-9.-]+$/.test(cfg.image_model) ? cfg.image_model : 'gemini-3.1-flash-image',\n  mock_scenario: providerMode === 'mock' && typeof cfg.mock_scenario === 'string' ? cfg.mock_scenario : 'ok',\n  image_mock_scenario: providerMode === 'mock' && typeof cfg.image_mock_scenario === 'string' ? cfg.image_mock_scenario : 'ok',\n  image_provider: cfg.image_provider === 'pollinations' ? 'pollinations' : 'gemini',\n  pollinations_model: typeof cfg.pollinations_model === 'string' && /^[a-z0-9._-]+\\/[a-z0-9._-]+$/i.test(cfg.pollinations_model) ? cfg.pollinations_model : undefined,\n  // Views need a model that can move the camera around the reference object.\n  pollinations_view_model: typeof cfg.pollinations_view_model === 'string' && /^[a-z0-9._-]+\\/[a-z0-9._-]+$/i.test(cfg.pollinations_view_model) ? cfg.pollinations_view_model : 'openai/gpt-image-1-mini',\n};\nreturn [{ json: { valid: Object.keys(errors).length === 0, errors, project_id: projectId, final_design_id: designId, view_types: viewTypes, config } }];"
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000003",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000003",
       "name": "Request valid?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -58,7 +58,7 @@
           },
           "conditions": [
             {
-              "id": "d0a1b2c3-0000-4000-8000-000000000003",
+              "id": "a1a1e0c2-c0de-4000-8000-000000000003",
               "leftValue": "={{ $json.valid }}",
               "rightValue": "",
               "operator": {
@@ -74,7 +74,7 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000004",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000004",
       "name": "Respond 422 Invalid",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
@@ -91,8 +91,8 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000005",
-      "name": "Start generation",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000005",
+      "name": "Start views",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
@@ -101,9 +101,9 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM start_concept_generation($1::uuid, $2::int, 'n8n');",
+        "query": "SELECT * FROM start_view_generation($1::uuid, $2::uuid, CASE WHEN $3 = '' THEN NULL ELSE string_to_array($3, ',')::view_type[] END);",
         "options": {
-          "queryReplacement": "={{ [ $json.project_id, $json.concept_count ] }}"
+          "queryReplacement": "={{ [ $json.project_id, $json.final_design_id, $json.view_types.join(',') ] }}"
         }
       },
       "credentials": {
@@ -114,7 +114,7 @@
       "onError": "continueErrorOutput"
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000006",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000006",
       "name": "Respond 503 Database",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
@@ -131,7 +131,7 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000007",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000007",
       "name": "Fail: database unavailable",
       "type": "n8n-nodes-base.stopAndError",
       "typeVersion": 1,
@@ -141,11 +141,11 @@
       ],
       "parameters": {
         "errorType": "errorMessage",
-        "errorMessage": "Concept generation could not start: database unavailable"
+        "errorMessage": "Views could not start: database unavailable"
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000008",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000008",
       "name": "Prepare response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -156,11 +156,11 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// Turns the start_concept_generation() outcome into the HTTP answer for the web app.\nconst r = $input.first().json;\nconst req = $('Validate request').first().json;\nconst answers = {\n  started: [202, { project_id: req.project_id, status: 'GENERATING_CONCEPTS', accepted: true, concept_count: req.concept_count }],\n  not_found: [422, { error: { code: 'project_not_found', message: 'Project not found.' } }],\n  invalid_state: [409, { error: { code: 'invalid_state', message: `Concepts can't be generated while the project is ${r.current_status}.`, status: r.current_status } }],\n  invalid_request: [422, { error: { code: 'validation_failed', message: 'Invalid request', fields: { concept_count: 'concept_count must be an integer from 2 to 5.' } } }],\n};\nconst [statusCode, responseBody] = answers[r.outcome] ?? [500, { error: { code: 'unexpected', message: 'Unexpected result.' } }];\nreturn [{ json: { statusCode, body: responseBody, started: r.outcome === 'started', project: r, request: req } }];"
+        "jsCode": "const r = $input.first().json;\nconst req = $('Validate request').first().json;\nconst views = Array.isArray(r.views) ? r.views : [];\nconst answers = {\n  started: [202, { project_id: req.project_id, final_design_id: req.final_design_id, view_types: views.map((v) => v.view_type), status: 'GENERATING_VIEWS', accepted: true }],\n  in_progress: [409, { error: { code: 'views_in_progress', message: 'That view is already being generated.' } }],\n  not_retryable: [409, { error: { code: 'not_retryable', message: 'Only failed views can be generated again while views are being generated.' } }],\n  nothing_to_do: [409, { error: { code: 'nothing_to_do', message: 'There are no views to generate.' } }],\n  invalid_state: [409, { error: { code: 'invalid_state', message: `Views can't be generated while the project is ${r.project_status}.` } }],\n  not_found: [422, { error: { code: 'design_not_found', message: 'No finalized design for this project.' } }],\n};\nconst [statusCode, responseBody] = answers[r.outcome] ?? [500, { error: { code: 'unexpected', message: 'Unexpected result.' } }];\nreturn [{ json: { statusCode, body: responseBody, started: r.outcome === 'started', claim: { ...r, views }, request: req } }];"
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000009",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000009",
       "name": "Respond to caller",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
@@ -177,7 +177,7 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000010",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000010",
       "name": "Started?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -195,7 +195,7 @@
           },
           "conditions": [
             {
-              "id": "d0a1b2c3-0000-4000-8000-000000000010",
+              "id": "a1a1e0c2-c0de-4000-8000-000000000010",
               "leftValue": "={{ $json.started }}",
               "rightValue": "",
               "operator": {
@@ -211,39 +211,13 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000011",
-      "name": "Build Claude request",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1540,
-        200
-      ],
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "language": "javaScript",
-        "jsCode": "/* @include lib/concept-generation.cjs */\n\nconst d = $input.first().json;\nconst { state, request } = buildInitialState({\n  projectId: d.request.project_id,\n  projectName: d.project.project_name,\n  clientName: d.project.client_name,\n  designBrief: d.project.design_brief,\n  count: d.request.concept_count,\n  existing: d.project.existing_concepts ?? [],\n  config: d.request.config,\n});\nreturn [{ json: { state, request } }];"
-      }
-    },
-    {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000012",
-      "name": "Attempt",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [
-        1760,
-        200
-      ],
-      "parameters": {}
-    },
-    {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000013",
-      "name": "Live provider?",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000011",
+      "name": "Instructions ready?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1980,
-        200
+        1540,
+        220
       ],
       "parameters": {
         "conditions": {
@@ -255,7 +229,92 @@
           },
           "conditions": [
             {
-              "id": "d0a1b2c3-0000-4000-8000-000000000013",
+              "id": "a1a1e0c2-c0de-4000-8000-000000000011",
+              "leftValue": "={{ Boolean($json.claim.view_prompts) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000012",
+      "name": "Fetch master image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        340
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=__3DS_APP_BASE_URL__/api/internal/assets/{{ $json.claim.master_asset_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — App callback token"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000013",
+      "name": "Build view-prompt request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        340
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/views.cjs */\n\n// Claude sees the canonical master image and design record, and writes all four view instructions once.\nconst d = $('Prepare response').first().json;\nconst master = $input.first().json;\nconst ctx = d.claim.context || {};\nconst state = buildViewsState({ projectId: d.request.project_id, finalDesignId: d.request.final_design_id,\n  concept: ctx.concept, revision: ctx.revision, currentPrompt: ctx.current_prompt,\n  image: master && master.data_base64 ? { mimeType: master.mime_type, data: master.data_base64 } : null,\n  config: d.request.config });\nreturn [{ json: { state, request: buildViewsRequest(state) } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000014",
+      "name": "Claude attempt",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        340
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000015",
+      "name": "Live Claude?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        340
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000015",
               "leftValue": "={{ $json.state.provider_mode === 'live' }}",
               "rightValue": "",
               "operator": {
@@ -271,13 +330,13 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000014",
-      "name": "Claude: create message",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000016",
+      "name": "Claude: view instructions",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2200,
-        100
+        2640,
+        240
       ],
       "parameters": {
         "method": "POST",
@@ -302,7 +361,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.request) }}",
         "options": {
-          "timeout": 150000,
+          "timeout": 180000,
           "response": {
             "response": {
               "fullResponse": true,
@@ -320,43 +379,43 @@
       "onError": "continueErrorOutput"
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000015",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000017",
       "name": "Mock Claude",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2200,
-        320
+        2640,
+        460
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "/* @include lib/concept-generation.cjs */\n\n// Offline provider for tests and development (config.provider_mode = \"mock\").\nconst { state } = $input.first().json;\nreturn [{ json: mockClaude(state) }];"
+        "jsCode": "/* @include lib/views.cjs */\n\nconst { state } = $input.first().json;\nreturn [{ json: mockViews(state) }];"
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000016",
-      "name": "Evaluate response",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000018",
+      "name": "Evaluate instructions",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2420,
-        200
+        2860,
+        340
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "/* @include lib/concept-generation.cjs */\n\n// One decision per Claude call: save, retry (repair / backoff) or fail gracefully.\nconst { state, request } = $('Attempt').last().json;\nconst r = $input.first().json;\nlet result;\nif (r.transportError) result = { transportError: r.transportError };\nelse if (r.statusCode !== undefined) result = { statusCode: r.statusCode, body: r.body };\nelse result = { transportError: String(r.error?.message ?? r.message ?? r.error?.description ?? 'request failed') };\nreturn [{ json: evaluateAttempt(state, request, result) }];"
+        "jsCode": "/* @include lib/views.cjs */\n\nconst att = $('Claude attempt').last().json;\nconst r = $input.first().json;\nlet result;\nif (r.transportError) result = { transportError: r.transportError };\nelse if (r.statusCode !== undefined) result = { statusCode: r.statusCode, body: r.body };\nelse result = { transportError: String(r.error?.message ?? r.message ?? r.error?.description ?? 'request failed') };\nconst out = evaluateViewsAttempt(att.state, result);\nfor (const k of []) if (att[k] !== undefined && out[k] === undefined) out[k] = att[k];\nif (out.action === 'retry' && !out.request) out.request = att.request;\nreturn [{ json: out }];"
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000017",
-      "name": "Save?",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000019",
+      "name": "Instructions ok?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2640,
-        200
+        3080,
+        340
       ],
       "parameters": {
         "conditions": {
@@ -368,7 +427,7 @@
           },
           "conditions": [
             {
-              "id": "e0a1b2c3-0000-4000-8000-000000000017",
+              "id": "a1a1e0c2-c0de-4000-8000-000000000019",
               "leftValue": "={{ $json.action }}",
               "rightValue": "save",
               "operator": {
@@ -383,13 +442,13 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000018",
-      "name": "Retry?",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000020",
+      "name": "Retry instructions?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        2860,
-        320
+        3300,
+        460
       ],
       "parameters": {
         "conditions": {
@@ -401,7 +460,7 @@
           },
           "conditions": [
             {
-              "id": "e0a1b2c3-0000-4000-8000-000000000018",
+              "id": "a1a1e0c2-c0de-4000-8000-000000000020",
               "leftValue": "={{ $json.action }}",
               "rightValue": "retry",
               "operator": {
@@ -416,34 +475,34 @@
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000019",
-      "name": "Backoff",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000021",
+      "name": "Claude backoff",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        3080,
-        420
+        3520,
+        580
       ],
       "parameters": {
         "amount": "={{ $json.delay_seconds }}",
         "unit": "seconds"
       },
-      "webhookId": "3c9d8e7f-1a2b-4c5d-8e9f-0a1b2c3d4e19"
+      "webhookId": "6d7e8f90-1234-4c5d-8e6f-7a8b9c0d1e08"
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000020",
-      "name": "Save concepts",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000022",
+      "name": "Save instructions",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        2860,
-        100
+        3300,
+        320
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM save_concept_texts($1::uuid, $2::jsonb, $3::jsonb);",
+        "query": "SELECT * FROM save_view_prompts($1::uuid, $2::jsonb);",
         "options": {
-          "queryReplacement": "={{ [ $json.project_id, JSON.stringify($json.concepts), JSON.stringify({ n8nExecutionId: $execution.id, source: 'n8n', model: $json.meta.model, attempts: $json.meta.attempts, providerMode: $json.meta.providerMode, usage: $json.meta.usage, durationMs: $json.meta.durationMs }) ] }}"
+          "queryReplacement": "={{ [ $json.final_design_id, JSON.stringify({ ...$json.view_prompts, generated_by: $json.meta.model, generated_at: new Date().toISOString() }) ] }}"
         }
       },
       "credentials": {
@@ -454,154 +513,32 @@
       "onError": "continueErrorOutput"
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000021",
-      "name": "Saved?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        3080,
-        60
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "d0a1b2c3-0000-4000-8000-000000000021",
-              "leftValue": "={{ $json.outcome === 'saved' }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000022",
-      "name": "Done",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [
-        5060,
-        -120
-      ],
-      "parameters": {}
-    },
-    {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000023",
-      "name": "Fail: stale result",
-      "type": "n8n-nodes-base.stopAndError",
-      "typeVersion": 1,
-      "position": [
-        3300,
-        160
-      ],
-      "parameters": {
-        "errorType": "errorMessage",
-        "errorMessage": "=Concepts discarded: the project is no longer generating ({{ $json.outcome }})"
-      }
-    },
-    {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000024",
-      "name": "Save failed",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000023",
+      "name": "Fan out views",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3080,
+        3740,
         220
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// The database rejected or could not store the concepts: fail the project cleanly.\nconst save = $('Evaluate response').last().json;\nconst err = $input.first().json;\nconst detail = String(err.message ?? err.error?.message ?? err.error?.description ?? 'database error').slice(0, 500);\nreturn [{ json: { action: 'fail', project_id: save.project_id, failure: { code: 'database_error', reason: 'The concepts could not be saved. Please try again.', detail }, meta: save.meta } }];"
+        "jsCode": "// One image job per view, each its own execution of \"[3D Studio] M1 · View image — generate\",\n// so one failed view never affects the others.\nconst d = $('Prepare response').first().json;\nconst cfg = d.request.config;\nreturn d.claim.views.map((v) => ({ json: { view_id: v.view_id, view_type: v.view_type, body: { view_id: v.view_id, config: { provider_mode: cfg.provider_mode, image_model: cfg.image_model, image_mock_scenario: cfg.image_mock_scenario, image_provider: cfg.image_provider, pollinations_model: cfg.pollinations_model, pollinations_view_model: cfg.pollinations_view_model } } } }));"
       }
     },
     {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000025",
-      "name": "Failure",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [
-        3300,
-        340
-      ],
-      "parameters": {}
-    },
-    {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000026",
-      "name": "Mark project failed",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.6,
-      "position": [
-        3520,
-        340
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT * FROM fail_concept_generation($1::uuid, $2, $3::jsonb);",
-        "options": {
-          "queryReplacement": "={{ [ $json.project_id, $json.failure.reason, JSON.stringify({ n8nExecutionId: $execution.id, code: $json.failure.code, detail: $json.failure.detail, attempts: $json.meta?.attempts, model: $json.meta?.model }) ] }}"
-        }
-      },
-      "credentials": {
-        "postgres": {
-          "name": "3D Studio — App DB"
-        }
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "id": "c0c0e0c2-0002-4a3f-9d10-000000000027",
-      "name": "Fail: concept generation",
-      "type": "n8n-nodes-base.stopAndError",
-      "typeVersion": 1,
-      "position": [
-        3740,
-        340
-      ],
-      "parameters": {
-        "errorType": "errorMessage",
-        "errorMessage": "=Concept generation failed: {{ $('Failure').last().json.failure.code }}"
-      }
-    },
-    {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000101",
-      "name": "Fan out images",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3300,
-        -80
-      ],
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "language": "javaScript",
-        "jsCode": "// One image job per concept. Each runs as its own execution of\n// \"[3D Studio] M1 · Concept image — generate\", so one failure never affects the others.\nconst saved = $input.first().json;\nconst cfg = $('Validate request').first().json.config;\nconst ids = Array.isArray(saved.concept_ids) ? saved.concept_ids : [];\nreturn ids.map((id) => ({ json: { concept_id: id, body: { concept_id: id, config: { provider_mode: cfg.provider_mode, image_model: cfg.image_model, image_mock_scenario: cfg.image_mock_scenario, image_provider: cfg.image_provider, pollinations_model: cfg.pollinations_model } } } }));"
-      }
-    },
-    {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000102",
-      "name": "Start image job",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000024",
+      "name": "Start view job",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3520,
-        -80
+        3960,
+        220
       ],
       "parameters": {
         "method": "POST",
-        "url": "__3DS_N8N_SELF_URL__/webhook/3d-studio/concept-image-generate",
+        "url": "__3DS_N8N_SELF_URL__/webhook/3d-studio/view-image-generate",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -627,34 +564,34 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000103",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000025",
       "name": "Check dispatch",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3740,
-        -80
+        4180,
+        220
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// Concepts whose job could not be started are failed right away (retryable from the app).\nconst fan = $('Fan out images').all();\nconst res = $input.all();\nconst undispatched = [];\nconst detail = {};\nfan.forEach((f, i) => {\n  const r = res[i]?.json ?? {};\n  if (r.statusCode !== 202) {\n    undispatched.push(f.json.concept_id);\n    detail[f.json.concept_id] = r.statusCode ?? String(r.error?.message ?? r.message ?? 'no response').slice(0, 200);\n  }\n});\nreturn [{ json: { project_id: $('Evaluate response').last().json.project_id, concept_ids: fan.map((f) => f.json.concept_id), undispatched, detail } }];"
+        "jsCode": "const fan = $('Fan out views').all();\nconst res = $input.all();\nconst undispatched = [];\nfan.forEach((f, i) => { if ((res[i]?.json ?? {}).statusCode !== 202) undispatched.push(f.json.view_id); });\nreturn [{ json: { project_id: $('Prepare response').first().json.request.project_id, view_ids: fan.map((f) => f.json.view_id), undispatched } }];"
       }
     },
     {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000104",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000026",
       "name": "Fail undispatched",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        3960,
-        -80
+        4400,
+        220
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT count(f.*)::int AS failed FROM jsonb_array_elements_text($1::jsonb) AS u(id) CROSS JOIN LATERAL fail_concept_image(u.id::uuid, 'The image job could not be started. You can retry this image.', $2::jsonb) AS f;",
+        "query": "SELECT count(f.*)::int AS failed FROM jsonb_array_elements_text($1::jsonb) AS u(id) CROSS JOIN LATERAL fail_view_image(u.id::uuid, 'The view job could not be started. You can retry this view.', '{\"code\":\"view_dispatch\"}'::jsonb) AS f;",
         "options": {
-          "queryReplacement": "={{ [ JSON.stringify($json.undispatched), JSON.stringify({ code: 'image_dispatch', detail: $json.detail }) ] }}"
+          "queryReplacement": "={{ [ JSON.stringify($json.undispatched) ] }}"
         }
       },
       "credentials": {
@@ -665,34 +602,34 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000105",
-      "name": "Wait for images",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000027",
+      "name": "Wait for views",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        4180,
-        -80
+        4620,
+        220
       ],
       "parameters": {
         "amount": 3,
         "unit": "seconds"
       },
-      "webhookId": "6e7f8091-a2b3-4c4d-9e5f-60718293a405"
+      "webhookId": "6e7f8091-a2b3-4c4d-9e5f-60718293a408"
     },
     {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000106",
-      "name": "Check images",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000028",
+      "name": "Check views",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        4400,
-        -80
+        4840,
+        220
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT count(*) FILTER (WHERE status = 'GENERATING')::int AS pending, count(*)::int AS total FROM concepts WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid);",
+        "query": "SELECT count(*) FILTER (WHERE status = 'GENERATING')::int AS pending FROM final_views WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)::uuid);",
         "options": {
-          "queryReplacement": "={{ [ JSON.stringify($('Check dispatch').first().json.concept_ids) ] }}"
+          "queryReplacement": "={{ [ JSON.stringify($('Check dispatch').first().json.view_ids) ] }}"
         }
       },
       "credentials": {
@@ -703,13 +640,13 @@
       "onError": "continueRegularOutput"
     },
     {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000107",
-      "name": "Images settled?",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000029",
+      "name": "Views settled?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        4620,
-        -80
+        5060,
+        220
       ],
       "parameters": {
         "conditions": {
@@ -721,7 +658,7 @@
           },
           "conditions": [
             {
-              "id": "d0a1b2c3-0000-4000-8000-000000000051",
+              "id": "d0a1b2c3-0000-4000-8000-000000000081",
               "leftValue": "={{ $json.pending === 0 || $runIndex >= 240 }}",
               "rightValue": "",
               "operator": {
@@ -737,19 +674,19 @@
       }
     },
     {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000108",
-      "name": "Finish generation",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000030",
+      "name": "Finish views",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        4840,
-        -100
+        5280,
+        200
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM finish_concept_generation($1::uuid, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), $3::jsonb);",
+        "query": "SELECT * FROM finish_view_generation($1::uuid, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid));",
         "options": {
-          "queryReplacement": "={{ [ $('Check dispatch').first().json.project_id, JSON.stringify($('Check dispatch').first().json.concept_ids), JSON.stringify({ n8nExecutionId: $execution.id, source: 'n8n', model: $('Evaluate response').last().json.meta.model, attempts: $('Evaluate response').last().json.meta.attempts, providerMode: $('Evaluate response').last().json.meta.providerMode, usage: $('Evaluate response').last().json.meta.usage, durationMs: $('Evaluate response').last().json.meta.durationMs }) ] }}"
+          "queryReplacement": "={{ [ $('Check dispatch').first().json.project_id, JSON.stringify($('Check dispatch').first().json.view_ids) ] }}"
         }
       },
       "credentials": {
@@ -760,17 +697,80 @@
       "onError": "continueErrorOutput"
     },
     {
-      "id": "b2c3d4e5-0005-4a3f-9d10-000000000109",
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000031",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        5500,
+        180
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000032",
       "name": "Fail: finish",
       "type": "n8n-nodes-base.stopAndError",
       "typeVersion": 1,
       "position": [
-        5060,
-        40
+        5500,
+        320
       ],
       "parameters": {
         "errorType": "errorMessage",
-        "errorMessage": "Concept batch could not be closed (the stale-generation reaper will recover it)"
+        "errorMessage": "Views run could not be closed (the stale-job recovery will handle it)"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000033",
+      "name": "Instructions failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        440
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Claude couldn't prepare the instructions, or they couldn't be saved: this run's views fail (retryable).\nconst d = $('Prepare response').first().json;\nconst j = $input.first().json;\nconst failure = j.failure ?? { code: 'prepare_failed', reason: 'The view instructions could not be prepared. Please retry.', detail: String(j.error?.message ?? j.message ?? '').slice(0, 500) };\nreturn [{ json: { project_id: d.request.project_id, view_ids: d.claim.views.map((v) => v.view_id), failure, meta: j.meta ?? {} } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000034",
+      "name": "Mark views failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3740,
+        440
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM fail_view_preparation($1::uuid, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)::uuid), $3, $4::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, JSON.stringify($json.view_ids), $json.failure.reason, JSON.stringify({ n8nExecutionId: $execution.id, code: $json.failure.code, detail: $json.failure.detail, attempts: $json.meta?.attempts }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a1a1e0c2-0008-4a3f-9d10-000000000035",
+      "name": "Fail: instructions",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3960,
+        440
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "=View instructions failed: {{ $('Instructions failed').last().json.failure.code }}"
       }
     }
   ],
@@ -801,7 +801,7 @@
       "main": [
         [
           {
-            "node": "Start generation",
+            "node": "Start views",
             "type": "main",
             "index": 0
           }
@@ -815,7 +815,7 @@
         ]
       ]
     },
-    "Start generation": {
+    "Start views": {
       "main": [
         [
           {
@@ -870,7 +870,7 @@
       "main": [
         [
           {
-            "node": "Build Claude request",
+            "node": "Instructions ready?",
             "type": "main",
             "index": 0
           }
@@ -878,33 +878,69 @@
         []
       ]
     },
-    "Build Claude request": {
+    "Instructions ready?": {
       "main": [
         [
           {
-            "node": "Attempt",
+            "node": "Fan out views",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch master image",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Attempt": {
+    "Fetch master image": {
       "main": [
         [
           {
-            "node": "Live provider?",
+            "node": "Build view-prompt request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Instructions failed",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Live provider?": {
+    "Build view-prompt request": {
       "main": [
         [
           {
-            "node": "Claude: create message",
+            "node": "Claude attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude attempt": {
+      "main": [
+        [
+          {
+            "node": "Live Claude?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live Claude?": {
+      "main": [
+        [
+          {
+            "node": "Claude: view instructions",
             "type": "main",
             "index": 0
           }
@@ -918,18 +954,18 @@
         ]
       ]
     },
-    "Claude: create message": {
+    "Claude: view instructions": {
       "main": [
         [
           {
-            "node": "Evaluate response",
+            "node": "Evaluate instructions",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Evaluate response",
+            "node": "Evaluate instructions",
             "type": "main",
             "index": 0
           }
@@ -940,152 +976,101 @@
       "main": [
         [
           {
-            "node": "Evaluate response",
+            "node": "Evaluate instructions",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Evaluate response": {
+    "Evaluate instructions": {
       "main": [
         [
           {
-            "node": "Save?",
+            "node": "Instructions ok?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Save?": {
+    "Instructions ok?": {
       "main": [
         [
           {
-            "node": "Save concepts",
+            "node": "Save instructions",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Retry?",
+            "node": "Retry instructions?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Retry?": {
+    "Retry instructions?": {
       "main": [
         [
           {
-            "node": "Backoff",
+            "node": "Claude backoff",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Failure",
+            "node": "Instructions failed",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Backoff": {
+    "Claude backoff": {
       "main": [
         [
           {
-            "node": "Attempt",
+            "node": "Claude attempt",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Save concepts": {
+    "Save instructions": {
       "main": [
         [
           {
-            "node": "Saved?",
+            "node": "Fan out views",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Save failed",
+            "node": "Instructions failed",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Saved?": {
+    "Fan out views": {
       "main": [
         [
           {
-            "node": "Fan out images",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Fail: stale result",
+            "node": "Start view job",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Save failed": {
-      "main": [
-        [
-          {
-            "node": "Failure",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Failure": {
-      "main": [
-        [
-          {
-            "node": "Mark project failed",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Mark project failed": {
-      "main": [
-        [
-          {
-            "node": "Fail: concept generation",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Fan out images": {
-      "main": [
-        [
-          {
-            "node": "Start image job",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Start image job": {
+    "Start view job": {
       "main": [
         [
           {
@@ -1111,54 +1096,54 @@
       "main": [
         [
           {
-            "node": "Wait for images",
+            "node": "Wait for views",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Wait for images": {
+    "Wait for views": {
       "main": [
         [
           {
-            "node": "Check images",
+            "node": "Check views",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Check images": {
+    "Check views": {
       "main": [
         [
           {
-            "node": "Images settled?",
+            "node": "Views settled?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Images settled?": {
+    "Views settled?": {
       "main": [
         [
           {
-            "node": "Finish generation",
+            "node": "Finish views",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Wait for images",
+            "node": "Wait for views",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Finish generation": {
+    "Finish views": {
       "main": [
         [
           {
@@ -1175,6 +1160,28 @@
           }
         ]
       ]
+    },
+    "Instructions failed": {
+      "main": [
+        [
+          {
+            "node": "Mark views failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark views failed": {
+      "main": [
+        [
+          {
+            "node": "Fail: instructions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -1182,6 +1189,6 @@
     "saveDataErrorExecution": "all",
     "saveDataSuccessExecution": "all",
     "saveManualExecutions": true,
-    "executionTimeout": 1500
+    "executionTimeout": 1800
   }
 }

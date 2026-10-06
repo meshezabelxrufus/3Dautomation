@@ -1,0 +1,1430 @@
+{
+  "name": "[3D Studio] M1 · Concept — refine",
+  "nodes": [
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "3d-studio/concept-refine",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "9a1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c07",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — Inbound webhook token"
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000002",
+      "name": "Validate request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Refinement of one concept version. The app sends project, concept and revision ids;\n// all three must belong together (checked again when loading).\nconst body = $input.first().json.body ?? {};\nconst errors = {};\nconst uuid = (v) => (typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.trim()) ? v.trim() : null);\nconst revisionId = uuid(body.revision_id);\nconst conceptId = uuid(body.concept_id);\nconst projectId = uuid(body.project_id);\nif (!revisionId) errors.revision_id = 'revision_id must be a UUID.';\nif (!conceptId) errors.concept_id = 'concept_id must be a UUID.';\nif (!projectId) errors.project_id = 'project_id must be a UUID.';\nconst cfg = body.config && typeof body.config === 'object' ? body.config : {};\nconst providerMode = cfg.provider_mode === 'mock' ? 'mock' : 'live';\nconst config = {\n  provider_mode: providerMode,\n  model: typeof cfg.model === 'string' && /^claude-[a-z0-9.-]+$/.test(cfg.model) ? cfg.model : 'claude-sonnet-5-5',\n  effort: ['low', 'medium', 'high', 'xhigh', 'max'].includes(cfg.effort) ? cfg.effort : 'high',\n  image_model: typeof cfg.image_model === 'string' && /^gemini-[a-z0-9.-]+$/.test(cfg.image_model) ? cfg.image_model : 'gemini-3.1-flash-image',\n  mock_scenario: providerMode === 'mock' && typeof cfg.mock_scenario === 'string' ? cfg.mock_scenario : 'ok',\n  image_mock_scenario: providerMode === 'mock' && typeof cfg.image_mock_scenario === 'string' ? cfg.image_mock_scenario : 'ok',\n  image_provider: cfg.image_provider === 'pollinations' ? 'pollinations' : 'gemini',\n  pollinations_model: typeof cfg.pollinations_model === 'string' && /^[a-z0-9._-]+\\/[a-z0-9._-]+$/i.test(cfg.pollinations_model) ? cfg.pollinations_model : undefined,\n  // Views need a model that can move the camera around the reference object.\n  pollinations_view_model: typeof cfg.pollinations_view_model === 'string' && /^[a-z0-9._-]+\\/[a-z0-9._-]+$/i.test(cfg.pollinations_view_model) ? cfg.pollinations_view_model : 'openai/gpt-image-1-mini',\n};\nreturn [{ json: { valid: Object.keys(errors).length === 0, errors, revision_id: revisionId, concept_id: conceptId, project_id: projectId, config } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000003",
+      "name": "Request valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000003",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000004",
+      "name": "Respond 422 Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'validation_failed', message: 'Invalid request', fields: $json.errors } } }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000005",
+      "name": "Load refinement",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        240
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH claim AS (\n  -- Claim the run: a duplicate webhook for the same revision finds it claimed and stops (no double cost).\n  UPDATE revisions SET claimed_at = now()\n  WHERE id = $1::uuid AND status = 'GENERATING' AND (claimed_at IS NULL OR claimed_at < now() - interval '11 minutes')\n  RETURNING id\n)\nSELECT (SELECT count(*) FROM claim)::int AS claimed, r.id AS revision_id, r.status AS revision_status, r.client_feedback, r.revision_number, r.base_revision_id,\n       c.id AS concept_id, c.project_id, c.concept_number, c.title, c.description, c.creative_direction,\n       c.visual_characteristics, c.shape_language, c.key_features, c.materials,\n       COALESCE(b.image_asset_id, c.image_asset_id) AS base_asset_id,\n       COALESCE(b.interpreted_instruction->>'revised_prompt', c.generation_prompt) AS current_prompt,\n       COALESCE(b.revision_number, 0) AS base_revision_number,\n       (SELECT count(*)::int FROM project_events e WHERE e.project_id = c.project_id\n          AND e.event_type = 'REFINEMENT_STARTED' AND e.payload->>'revisionId' = r.id::text) AS run_number,\n       (WITH RECURSIVE chain AS (\n          SELECT x.id, x.base_revision_id, x.revision_number, x.client_feedback, x.interpreted_instruction\n          FROM revisions x WHERE x.id = r.base_revision_id\n          UNION ALL\n          SELECT y.id, y.base_revision_id, y.revision_number, y.client_feedback, y.interpreted_instruction\n          FROM revisions y JOIN chain ON y.id = chain.base_revision_id)\n        SELECT COALESCE(jsonb_agg(jsonb_build_object('revision', revision_number, 'feedback', client_feedback,\n                                  'summary', interpreted_instruction->>'summary') ORDER BY revision_number), '[]'::jsonb)\n        FROM chain) AS history\nFROM revisions r\nJOIN concepts c ON c.id = r.concept_id\nLEFT JOIN revisions b ON b.id = r.base_revision_id\nWHERE r.id = $1::uuid AND c.id = $2::uuid AND c.project_id = $3::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.revision_id, $json.concept_id, $json.project_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000006",
+      "name": "Respond 503 Database",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'database_unavailable', message: 'The database is temporarily unavailable.' } } }}",
+        "options": {
+          "responseCode": 503
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000007",
+      "name": "Fail: database unavailable",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        420
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "Refinement could not start: database unavailable"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000008",
+      "name": "Prepare response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const r = $input.first().json;\nconst req = $('Validate request').first().json;\nlet statusCode = 202, responseBody = { revision_id: req.revision_id, status: 'GENERATING', accepted: true }, started = true;\nif (!r.revision_id) { statusCode = 422; responseBody = { error: { code: 'revision_not_found', message: 'No such revision for this concept and project.' } }; started = false; }\nelse if (r.revision_status !== 'GENERATING') { statusCode = 409; responseBody = { error: { code: 'invalid_state', message: `The revision is already ${r.revision_status}.` } }; started = false; }\nelse if (!r.claimed) { statusCode = 409; responseBody = { error: { code: 'refinement_in_progress', message: 'This refinement is already being processed.' } }; started = false; }\nelse if (!r.base_asset_id) { statusCode = 409; responseBody = { error: { code: 'no_base_image', message: 'The concept has no image to refine yet.' } }; started = false; }\nreturn [{ json: { statusCode, body: responseBody, started, ctx: r, request: req } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000009",
+      "name": "Respond to caller",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000010",
+      "name": "Started?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000010",
+              "leftValue": "={{ $json.started }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000011",
+      "name": "Fetch current image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=__3DS_APP_BASE_URL__/api/internal/assets/{{ $json.ctx.base_asset_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — App callback token"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000012",
+      "name": "Build interpretation request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/refinement.cjs */\n\n// Claude sees the current version itself, not just its description.\nconst d = $('Prepare response').first().json;\nconst img = $input.first().json;\nconst c = d.ctx;\nconst state = buildRefineState({\n  revisionId: c.revision_id, projectId: c.project_id, conceptId: c.concept_id,\n  revisionNumber: c.revision_number, baseRevisionNumber: c.base_revision_number, runNumber: c.run_number,\n  concept: c, currentPrompt: c.current_prompt, history: c.history, feedback: c.client_feedback,\n  image: img && img.data_base64 ? { mimeType: img.mime_type, data: img.data_base64 } : null,\n  config: d.request.config,\n});\nreturn [{ json: { state, request: buildRefineRequest(state), ctx: c, config: d.request.config } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000013",
+      "name": "Claude attempt",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        180
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000014",
+      "name": "Live Claude?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000014",
+              "leftValue": "={{ $json.state.provider_mode === 'live' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000015",
+      "name": "Claude: interpret feedback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "server-side-fallback-2026-07-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 150000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "3D Studio — Anthropic"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000016",
+      "name": "Mock Claude",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/refinement.cjs */\n\nconst { state } = $input.first().json;\nreturn [{ json: mockRefine(state) }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000017",
+      "name": "Evaluate interpretation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/refinement.cjs */\n\nconst att = $('Claude attempt').last().json;\nconst r = $input.first().json;\nlet result;\nif (r.transportError) result = { transportError: r.transportError };\nelse if (r.statusCode !== undefined) result = { statusCode: r.statusCode, body: r.body };\nelse result = { transportError: String(r.error?.message ?? r.message ?? r.error?.description ?? 'request failed') };\nconst out = evaluateRefineAttempt(att.state, result);\nfor (const k of [\"ctx\", \"config\"]) if (att[k] !== undefined && out[k] === undefined) out[k] = att[k];\nif (out.action === 'retry' && !out.request) out.request = att.request;\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000018",
+      "name": "Interpretation ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000018",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "save",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000019",
+      "name": "Retry interpretation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000019",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000020",
+      "name": "Claude backoff",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3300,
+        420
+      ],
+      "parameters": {
+        "amount": "={{ $json.delay_seconds }}",
+        "unit": "seconds"
+      },
+      "webhookId": "6d7e8f90-1234-4c5d-8e6f-7a8b9c0d1e07"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000021",
+      "name": "Build edit request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        60
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/image-generation.cjs */\n\n// The image model edits the current image with Claude's edit prompt (what changes + what stays).\nconst prev = $input.first().json;\nconst img = $('Fetch current image').last().json;\nconst state = buildImageState({ revisionId: prev.revision_id, projectId: prev.project_id, conceptNumber: prev.ctx.concept_number,\n  prompt: prev.interpretation.edit_prompt, config: { ...prev.config, mock_scenario: prev.config.image_mock_scenario },\n  referenceImage: true, skipSuffix: true });\nconst request = buildProviderRequest(state, { mimeType: img.mime_type, data: img.data_base64 });\nreturn [{ json: { state, request, interpretation: prev.interpretation, interpretation_meta: prev.meta } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000022",
+      "name": "Edit attempt",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3300,
+        60
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000023",
+      "name": "Live image?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3520,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000023",
+              "leftValue": "={{ $json.state.provider_mode === 'live' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000024",
+      "name": "Pollinations?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3740,
+        -60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000024",
+              "leftValue": "={{ $json.state.provider === 'pollinations' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000025",
+      "name": "Pollinations: edit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3960,
+        -180
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.request.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request.body) }}",
+        "options": {
+          "timeout": 150000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — Pollinations"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000026",
+      "name": "Nano Banana: edit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3960,
+        -20
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.request.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request.body) }}",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "name": "3D Studio — Gemini"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000027",
+      "name": "Slow mock?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3740,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000027",
+              "leftValue": "={{ $json.state.mock_scenario === 'slow' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000028",
+      "name": "Simulated latency",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3960,
+        140
+      ],
+      "parameters": {
+        "amount": 12,
+        "unit": "seconds"
+      },
+      "webhookId": "7e8f9012-3456-4d6e-8f70-8b9c0d1e2f07"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000029",
+      "name": "Mock Nano Banana",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/image-generation.cjs */\n\nconst { state } = $('Edit attempt').last().json;\nreturn [{ json: mockImage(state) }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000030",
+      "name": "Evaluate edit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4400,
+        60
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/image-generation.cjs */\n\nconst att = $('Edit attempt').last().json;\nconst r = $input.first().json;\nlet result;\nif (r.transportError) result = { transportError: r.transportError };\nelse if (r.statusCode !== undefined) result = { statusCode: r.statusCode, body: r.body };\nelse result = { transportError: String(r.error?.message ?? r.message ?? r.error?.description ?? 'request failed') };\nconst out = evaluateImageAttempt(att.state, result);\nfor (const k of [\"interpretation\", \"interpretation_meta\"]) if (att[k] !== undefined && out[k] === undefined) out[k] = att[k];\nif (out.action === 'retry' && !out.request) out.request = att.request;\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000031",
+      "name": "Edit ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4620,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000031",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "save",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000032",
+      "name": "Retry edit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4840,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000032",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000033",
+      "name": "Edit backoff",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        5060,
+        300
+      ],
+      "parameters": {
+        "amount": "={{ $json.delay_seconds }}",
+        "unit": "seconds"
+      },
+      "webhookId": "8f901234-5678-4e7f-9081-9c0d1e2f3a07"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000034",
+      "name": "Store image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4840,
+        -60
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "__3DS_APP_BASE_URL__/api/internal/assets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_id: $json.project_id, kind: 'REVISION', data_base64: $json.image.data_base64, provider: $json.meta.provider, model: $json.model, provider_request_id: $json.provider_request_id, provider_url: null, prompt: $json.prompt }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — App callback token"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000035",
+      "name": "Complete refinement",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        5060,
+        -80
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM complete_refinement($1::uuid, $2::uuid, $3::jsonb, $4, $5::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $('Evaluate edit').last().json.revision_id, $json.asset_id, JSON.stringify($('Evaluate edit').last().json.interpretation), $('Evaluate edit').last().json.prompt, JSON.stringify({ n8nExecutionId: $execution.id, model: $('Evaluate edit').last().json.model, imageAttempts: $('Evaluate edit').last().json.meta.attempts, claude: $('Evaluate edit').last().json.interpretation_meta }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000036",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        5280,
+        -100
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000037",
+      "name": "Step failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5060,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Maps a failed fetch/store/save step to a refinement failure.\nconst ctx = $('Prepare response').first().json.ctx;\nconst err = $input.first().json;\nreturn [{ json: { action: 'fail', revision_id: ctx.revision_id, failure: { code: 'refine_step_failed', reason: 'The refined image could not be produced or stored. Please retry.', detail: String(err.error?.message ?? err.message ?? 'step failed').slice(0, 500) }, meta: {} } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000038",
+      "name": "Failure",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        5280,
+        320
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000039",
+      "name": "Mark refinement failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        5500,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM fail_refinement($1::uuid, $2, $3::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.revision_id, $json.failure.reason, JSON.stringify({ n8nExecutionId: $execution.id, code: $json.failure.code, detail: $json.failure.detail }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a1a1e0c2-0007-4a3f-9d10-000000000040",
+      "name": "Fail: refinement",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        5720,
+        320
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "=Refinement failed: {{ $('Failure').last().json.failure.code }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "node": "Request valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request valid?": {
+      "main": [
+        [
+          {
+            "node": "Load refinement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 422 Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load refinement": {
+      "main": [
+        [
+          {
+            "node": "Prepare response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 503 Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 503 Database": {
+      "main": [
+        [
+          {
+            "node": "Fail: database unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare response": {
+      "main": [
+        [
+          {
+            "node": "Respond to caller",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to caller": {
+      "main": [
+        [
+          {
+            "node": "Started?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Started?": {
+      "main": [
+        [
+          {
+            "node": "Fetch current image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Fetch current image": {
+      "main": [
+        [
+          {
+            "node": "Build interpretation request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Step failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build interpretation request": {
+      "main": [
+        [
+          {
+            "node": "Claude attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude attempt": {
+      "main": [
+        [
+          {
+            "node": "Live Claude?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live Claude?": {
+      "main": [
+        [
+          {
+            "node": "Claude: interpret feedback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mock Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: interpret feedback": {
+      "main": [
+        [
+          {
+            "node": "Evaluate interpretation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate interpretation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock Claude": {
+      "main": [
+        [
+          {
+            "node": "Evaluate interpretation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate interpretation": {
+      "main": [
+        [
+          {
+            "node": "Interpretation ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretation ok?": {
+      "main": [
+        [
+          {
+            "node": "Build edit request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry interpretation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry interpretation?": {
+      "main": [
+        [
+          {
+            "node": "Claude backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude backoff": {
+      "main": [
+        [
+          {
+            "node": "Claude attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build edit request": {
+      "main": [
+        [
+          {
+            "node": "Edit attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit attempt": {
+      "main": [
+        [
+          {
+            "node": "Live image?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Live image?": {
+      "main": [
+        [
+          {
+            "node": "Pollinations?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slow mock?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pollinations?": {
+      "main": [
+        [
+          {
+            "node": "Pollinations: edit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nano Banana: edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pollinations: edit": {
+      "main": [
+        [
+          {
+            "node": "Evaluate edit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nano Banana: edit": {
+      "main": [
+        [
+          {
+            "node": "Evaluate edit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slow mock?": {
+      "main": [
+        [
+          {
+            "node": "Simulated latency",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mock Nano Banana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simulated latency": {
+      "main": [
+        [
+          {
+            "node": "Mock Nano Banana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock Nano Banana": {
+      "main": [
+        [
+          {
+            "node": "Evaluate edit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate edit": {
+      "main": [
+        [
+          {
+            "node": "Edit ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit ok?": {
+      "main": [
+        [
+          {
+            "node": "Store image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry edit?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry edit?": {
+      "main": [
+        [
+          {
+            "node": "Edit backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit backoff": {
+      "main": [
+        [
+          {
+            "node": "Edit attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store image": {
+      "main": [
+        [
+          {
+            "node": "Complete refinement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Step failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete refinement": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Step failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Step failed": {
+      "main": [
+        [
+          {
+            "node": "Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failure": {
+      "main": [
+        [
+          {
+            "node": "Mark refinement failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark refinement failed": {
+      "main": [
+        [
+          {
+            "node": "Fail: refinement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 600
+  }
+}

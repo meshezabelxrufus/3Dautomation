@@ -1,0 +1,1082 @@
+{
+  "name": "[3D Studio] M1 · View image — generate",
+  "nodes": [
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "3d-studio/view-image-generate",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "9a1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c09",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — Inbound webhook token"
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000002",
+      "name": "Validate request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// One view's image job, started by the views workflow. The view row (GENERATING) already exists.\nconst body = $input.first().json.body ?? {};\nconst errors = {};\nconst viewId = typeof body.view_id === 'string' ? body.view_id.trim() : '';\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(viewId)) errors.view_id = 'view_id must be a UUID.';\nconst cfg = body.config && typeof body.config === 'object' ? body.config : {};\nconst providerMode = cfg.provider_mode === 'mock' ? 'mock' : 'live';\nconst config = {\n  provider_mode: providerMode,\n  model: typeof cfg.model === 'string' && /^claude-[a-z0-9.-]+$/.test(cfg.model) ? cfg.model : 'claude-sonnet-5-5',\n  effort: ['low', 'medium', 'high', 'xhigh', 'max'].includes(cfg.effort) ? cfg.effort : 'high',\n  image_model: typeof cfg.image_model === 'string' && /^gemini-[a-z0-9.-]+$/.test(cfg.image_model) ? cfg.image_model : 'gemini-3.1-flash-image',\n  mock_scenario: providerMode === 'mock' && typeof cfg.mock_scenario === 'string' ? cfg.mock_scenario : 'ok',\n  image_mock_scenario: providerMode === 'mock' && typeof cfg.image_mock_scenario === 'string' ? cfg.image_mock_scenario : 'ok',\n  image_provider: cfg.image_provider === 'pollinations' ? 'pollinations' : 'gemini',\n  pollinations_model: typeof cfg.pollinations_model === 'string' && /^[a-z0-9._-]+\\/[a-z0-9._-]+$/i.test(cfg.pollinations_model) ? cfg.pollinations_model : undefined,\n  // Views need a model that can move the camera around the reference object.\n  pollinations_view_model: typeof cfg.pollinations_view_model === 'string' && /^[a-z0-9._-]+\\/[a-z0-9._-]+$/i.test(cfg.pollinations_view_model) ? cfg.pollinations_view_model : 'openai/gpt-image-1-mini',\n};\nconfig.mock_scenario = config.image_mock_scenario;\nreturn [{ json: { valid: Object.keys(errors).length === 0, errors, view_id: viewId, config } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000003",
+      "name": "Request valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000003",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000004",
+      "name": "Respond 422 Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'validation_failed', message: 'Invalid request', fields: $json.errors } } }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000005",
+      "name": "Claim view job",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        240
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM start_view_image($1::uuid);",
+        "options": {
+          "queryReplacement": "={{ [ $json.view_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000006",
+      "name": "Respond 503 Database",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'database_unavailable', message: 'The database is temporarily unavailable.' } } }}",
+        "options": {
+          "responseCode": 503
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000007",
+      "name": "Fail: database unavailable",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        420
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "View job could not start: database unavailable"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000008",
+      "name": "Prepare response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const r = $input.first().json;\nconst req = $('Validate request').first().json;\nconst answers = {\n  started: [202, { view_id: req.view_id, status: 'GENERATING', accepted: true }],\n  in_progress: [409, { error: { code: 'view_in_progress', message: 'This view is already being generated.' } }],\n  already_done: [409, { error: { code: 'view_already_done', message: 'This view already has its image.' } }],\n  stale: [409, { error: { code: 'stale_view', message: 'A newer version of this view exists.' } }],\n  no_prompts: [409, { error: { code: 'no_prompts', message: 'The view instructions are not ready.' } }],\n  not_found: [422, { error: { code: 'view_not_found', message: 'View not found.' } }],\n};\nconst [statusCode, responseBody] = answers[r.outcome] ?? [500, { error: { code: 'unexpected', message: 'Unexpected result.' } }];\nreturn [{ json: { statusCode, body: responseBody, started: r.outcome === 'started', claim: r, request: req } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000009",
+      "name": "Respond to caller",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000010",
+      "name": "Started?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000010",
+              "leftValue": "={{ $json.started }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000011",
+      "name": "Fetch master image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=__3DS_APP_BASE_URL__/api/internal/assets/{{ $json.claim.master_asset_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — App callback token"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000012",
+      "name": "Build view request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/image-generation.cjs */\n/* @include lib/views.cjs */\n\n// Always from the canonical master image + the canonical instruction for this view, never from an earlier view image.\nconst d = $('Prepare response').first().json;\nconst master = $input.first().json;\nconst c = d.claim;\nconst cfg = { ...d.request.config, pollinations_model: d.request.config.pollinations_view_model };\nconst state = buildImageState({ viewId: c.view_id, projectId: c.project_id, conceptNumber: VIEW_INDEX[c.view_type] || 1,\n  prompt: c.prompt, config: cfg, referenceImage: true, skipSuffix: true, isRetry: c.version_number > 1 });\nreturn [{ json: { state, request: buildProviderRequest(state, { mimeType: master.mime_type, data: master.data_base64 }), view_type: c.view_type } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000013",
+      "name": "View attempt",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        180
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000014",
+      "name": "View attempt: live?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000014",
+              "leftValue": "={{ $json.state.provider_mode === 'live' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000015",
+      "name": "View attempt: Pollinations?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000015",
+              "leftValue": "={{ $json.state.provider === 'pollinations' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000016",
+      "name": "View attempt: Pollinations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        -60
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.request.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request.body) }}",
+        "options": {
+          "timeout": 150000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — Pollinations"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000017",
+      "name": "View attempt: Nano Banana",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.request.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request.body) }}",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "name": "3D Studio — Gemini"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000018",
+      "name": "View attempt: slow mock?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000018",
+              "leftValue": "={{ $json.state.mock_scenario === 'slow' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000019",
+      "name": "View attempt: simulated latency",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        260
+      ],
+      "parameters": {
+        "amount": 12,
+        "unit": "seconds"
+      },
+      "webhookId": "4b5c6d7e-8f90-4a1b-9c2d-3e4f5a6b7c09"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000020",
+      "name": "View attempt: mock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/image-generation.cjs */\n\nconst { state } = $('View attempt').last().json;\nreturn [{ json: mockImage(state) }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000021",
+      "name": "Evaluate view",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/image-generation.cjs */\n\nconst att = $('View attempt').last().json;\nconst r = $input.first().json;\nlet result;\nif (r.transportError) result = { transportError: r.transportError };\nelse if (r.statusCode !== undefined) result = { statusCode: r.statusCode, body: r.body };\nelse result = { transportError: String(r.error?.message ?? r.message ?? r.error?.description ?? 'request failed') };\nconst out = evaluateImageAttempt(att.state, result);\nfor (const k of [\"view_type\"]) if (att[k] !== undefined && out[k] === undefined) out[k] = att[k];\nif (out.action === 'retry' && !out.request) out.request = att.request;\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000022",
+      "name": "Save?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3300,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000022",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "save",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000023",
+      "name": "Retry?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3520,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000023",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "retry",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000024",
+      "name": "Backoff",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3740,
+        420
+      ],
+      "parameters": {
+        "amount": "={{ $json.delay_seconds }}",
+        "unit": "seconds"
+      },
+      "webhookId": "5c6d7e8f-9012-4b3c-8d4e-5f6a7b8c9d09"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000025",
+      "name": "Store image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        60
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "__3DS_APP_BASE_URL__/api/internal/assets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_id: $json.project_id, kind: 'VIEW', data_base64: $json.image.data_base64, provider: $json.meta.provider, model: $json.model, provider_request_id: $json.provider_request_id, provider_url: null, prompt: $json.prompt }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — App callback token"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000026",
+      "name": "Attach view image",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3740,
+        40
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM complete_view_image($1::uuid, $2::uuid, $3, $4::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $('Evaluate view').last().json.view_id, $json.asset_id, $('Evaluate view').last().json.prompt, JSON.stringify({ n8nExecutionId: $execution.id, model: $('Evaluate view').last().json.model, attempts: $('Evaluate view').last().json.meta.attempts, provider: $('Evaluate view').last().json.meta.provider, providerRequestId: $('Evaluate view').last().json.provider_request_id }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000027",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3960,
+        20
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000028",
+      "name": "Step failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const c = $('Prepare response').first().json.claim;\nconst err = $input.first().json;\nreturn [{ json: { action: 'fail', view_id: c.view_id, failure: { code: 'view_step_failed', reason: 'The view could not be produced or stored. You can retry this view.', detail: String(err.error?.message ?? err.message ?? 'step failed').slice(0, 500) }, meta: {} } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000029",
+      "name": "Failure",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3960,
+        320
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000030",
+      "name": "Mark view failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4180,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM fail_view_image($1::uuid, $2, $3::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.view_id, $json.failure.reason, JSON.stringify({ n8nExecutionId: $execution.id, code: $json.failure.code, detail: $json.failure.detail, attempts: $json.meta?.attempts }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a1a1e0c2-0009-4a3f-9d10-000000000031",
+      "name": "Fail: view",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        4400,
+        320
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "=View image failed: {{ $('Failure').last().json.failure.code }}"
+      }
+    }
+  ],
+  "connections": {
+    "View attempt": {
+      "main": [
+        [
+          {
+            "node": "View attempt: live?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "View attempt: live?": {
+      "main": [
+        [
+          {
+            "node": "View attempt: Pollinations?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "View attempt: slow mock?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "View attempt: Pollinations?": {
+      "main": [
+        [
+          {
+            "node": "View attempt: Pollinations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "View attempt: Nano Banana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "View attempt: Pollinations": {
+      "main": [
+        [
+          {
+            "node": "Evaluate view",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate view",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "View attempt: Nano Banana": {
+      "main": [
+        [
+          {
+            "node": "Evaluate view",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluate view",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "View attempt: slow mock?": {
+      "main": [
+        [
+          {
+            "node": "View attempt: simulated latency",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "View attempt: mock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "View attempt: simulated latency": {
+      "main": [
+        [
+          {
+            "node": "View attempt: mock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "View attempt: mock": {
+      "main": [
+        [
+          {
+            "node": "Evaluate view",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "node": "Request valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request valid?": {
+      "main": [
+        [
+          {
+            "node": "Claim view job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 422 Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim view job": {
+      "main": [
+        [
+          {
+            "node": "Prepare response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 503 Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 503 Database": {
+      "main": [
+        [
+          {
+            "node": "Fail: database unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare response": {
+      "main": [
+        [
+          {
+            "node": "Respond to caller",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to caller": {
+      "main": [
+        [
+          {
+            "node": "Started?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Started?": {
+      "main": [
+        [
+          {
+            "node": "Fetch master image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Fetch master image": {
+      "main": [
+        [
+          {
+            "node": "Build view request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Step failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build view request": {
+      "main": [
+        [
+          {
+            "node": "View attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate view": {
+      "main": [
+        [
+          {
+            "node": "Save?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save?": {
+      "main": [
+        [
+          {
+            "node": "Store image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Retry?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry?": {
+      "main": [
+        [
+          {
+            "node": "Backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backoff": {
+      "main": [
+        [
+          {
+            "node": "View attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store image": {
+      "main": [
+        [
+          {
+            "node": "Attach view image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Step failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach view image": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Step failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Step failed": {
+      "main": [
+        [
+          {
+            "node": "Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failure": {
+      "main": [
+        [
+          {
+            "node": "Mark view failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark view failed": {
+      "main": [
+        [
+          {
+            "node": "Fail: view",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 600
+  }
+}

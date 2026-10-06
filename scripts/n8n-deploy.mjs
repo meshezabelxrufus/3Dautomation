@@ -15,7 +15,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expandIncludes } from "./n8n-lib.mjs";
+import { expandIncludes, expandPlaceholders, placeholderValues } from "./n8n-lib.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW_DIR = path.join(ROOT, "n8n/workflows");
@@ -112,6 +112,48 @@ function desiredCredentials() {
       },
       syncOnlyWhen: Boolean(process.env.ANTHROPIC_API_KEY),
     },
+    {
+      // Nano Banana (Gemini image models). Same rule as Anthropic: synced only when GEMINI_API_KEY
+      // is set, otherwise a placeholder is created once.
+      name: `${CREDENTIAL_PREFIX}Gemini`,
+      type: "googlePalmApi",
+      data: {
+        host: "https://generativelanguage.googleapis.com",
+        apiKey: process.env.GEMINI_API_KEY || "not-configured",
+        allowedHttpRequestDomains: "domains",
+        allowedDomains: "generativelanguage.googleapis.com",
+      },
+      syncOnlyWhen: Boolean(process.env.GEMINI_API_KEY),
+    },
+    {
+      // Pollinations image API (IMAGE_PROVIDER=pollinations), key from https://enter.pollinations.ai/keys.
+      // Same rule as the other API keys: synced only when set, otherwise a placeholder is created once.
+      name: `${CREDENTIAL_PREFIX}Pollinations`,
+      type: "httpHeaderAuth",
+      data: { name: "Authorization", value: `Bearer ${process.env.POLLINATIONS_API_KEY || "not-configured"}` },
+      syncOnlyWhen: Boolean(process.env.POLLINATIONS_API_KEY),
+    },
+    {
+      // Google Drive (OAuth2). n8n needs a one-time "Connect my account" in its UI; the client ID/secret
+      // come from a Google Cloud OAuth client (GOOGLE_OAUTH_CLIENT_ID/SECRET), synced only when set.
+      name: `${CREDENTIAL_PREFIX}Google Drive`,
+      type: "googleDriveOAuth2Api",
+      data: {
+        clientId: process.env.GOOGLE_OAUTH_CLIENT_ID || "not-configured",
+        clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || "not-configured",
+        sendAdditionalBodyProperties: false,
+        additionalBodyProperties: "",
+        allowedHttpRequestDomains: "domains",
+        allowedDomains: "www.googleapis.com",
+      },
+      syncOnlyWhen: Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET),
+    },
+    {
+      // n8n -> app callbacks (asset upload/download). The app checks it in src/server/http/internal-auth.ts.
+      name: `${CREDENTIAL_PREFIX}App callback token`,
+      type: "httpHeaderAuth",
+      data: { name: "Authorization", value: `Bearer ${need("N8N_CALLBACK_TOKEN")}` },
+    },
   ];
 }
 
@@ -137,10 +179,12 @@ async function ensureCredentials() {
 
 // ---------------------------------------------------------------- workflows
 function loadWorkflowFiles() {
+  const values = placeholderValues();
+  log(`app base URL for n8n: ${values.__3DS_APP_BASE_URL__}  n8n self URL: ${values.__3DS_N8N_SELF_URL__}`);
   return readdirSync(WORKFLOW_DIR)
     .filter((f) => f.endsWith(".json"))
     .sort()
-    .map((file) => ({ file, wf: expandIncludes(JSON.parse(readFileSync(path.join(WORKFLOW_DIR, file), "utf8"))) }));
+    .map((file) => ({ file, wf: expandPlaceholders(expandIncludes(JSON.parse(readFileSync(path.join(WORKFLOW_DIR, file), "utf8"))), values) }));
 }
 
 const webhookPaths = (wf) =>

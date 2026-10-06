@@ -1,0 +1,1578 @@
+{
+  "name": "[3D Studio] M1 · Drive — export",
+  "nodes": [
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "3d-studio/drive-export",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "9a1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c10",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — Inbound webhook token"
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000002",
+      "name": "Validate request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Delivers the approved design package to Google Drive. Safe to call repeatedly (idempotent).\nconst body = $input.first().json.body ?? {};\nconst errors = {};\nconst projectId = typeof body.project_id === 'string' ? body.project_id.trim() : '';\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) errors.project_id = 'project_id must be a UUID.';\nconst cfg = body.config && typeof body.config === 'object' ? body.config : {};\nconst config = {\n  drive_mode: cfg.drive_mode === 'live' ? 'live' : 'test',\n  drive_parent_folder_id: typeof cfg.drive_parent_folder_id === 'string' && /^[\\w-]{10,}$/.test(cfg.drive_parent_folder_id) ? cfg.drive_parent_folder_id : 'root',\n};\nreturn [{ json: { valid: Object.keys(errors).length === 0, errors, project_id: projectId, config } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000003",
+      "name": "Request valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000003",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000004",
+      "name": "Respond 422 Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'validation_failed', message: 'Invalid request', fields: $json.errors } } }}",
+        "options": {
+          "responseCode": 422
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000005",
+      "name": "Start export",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        240
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM start_drive_export($1::uuid, $2);",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.config.drive_mode ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000006",
+      "name": "Respond 503 Database",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: { code: 'database_unavailable', message: 'The database is temporarily unavailable.' } } }}",
+        "options": {
+          "responseCode": 503
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000007",
+      "name": "Fail: database unavailable",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        420
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "Drive export could not start: database unavailable"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000008",
+      "name": "Prepare response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const r = $input.first().json;\nconst req = $('Validate request').first().json;\nconst answers = {\n  started: [202, { project_id: req.project_id, export_id: r.export_id, status: 'UPLOADING_TO_DRIVE', accepted: true }],\n  already_completed: [200, { project_id: req.project_id, status: 'COMPLETED', already_completed: true }],\n  in_progress: [409, { error: { code: 'export_in_progress', message: 'The Drive upload is already running.' } }],\n  invalid_state: [409, { error: { code: 'invalid_state', message: `The package can't be delivered while the project is ${r.project_status}.` } }],\n  not_found: [422, { error: { code: 'project_not_found', message: 'Project not found.' } }],\n};\nconst [statusCode, responseBody] = answers[r.outcome] ?? [500, { error: { code: 'unexpected', message: 'Unexpected result.' } }];\nreturn [{ json: { statusCode, body: responseBody, started: r.outcome === 'started', claim: r, request: req } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000009",
+      "name": "Respond to caller",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000010",
+      "name": "Started?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000010",
+              "leftValue": "={{ $json.started }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000011",
+      "name": "Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/drive.cjs */\n\nconst d = $input.first().json;\nreturn [{ json: { state: buildPlan(d.claim, d.request.config) } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000012",
+      "name": "Step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/drive.cjs */\n\n// Next Drive call for the next unfinished item (folders first, project.json last).\nconst state = $('Apply').isExecuted ? $('Apply').last().json.state : $('Plan').first().json.state;\nreturn [{ json: nextAction(state) }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000013",
+      "name": "Finished?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000013",
+              "leftValue": "={{ $json.op }}",
+              "rightValue": "finish",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000014",
+      "name": "API call?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000014",
+              "leftValue": "={{ $json.op }}",
+              "rightValue": "api",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000015",
+      "name": "Test double? (api)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000015",
+              "leftValue": "={{ $json.state.mode === 'test' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000016",
+      "name": "Create? (test)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000016",
+              "leftValue": "={{ $json.request.method }}",
+              "rightValue": "POST",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000017",
+      "name": "Create? (Google)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000017",
+              "leftValue": "={{ $json.request.method }}",
+              "rightValue": "POST",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000018",
+      "name": "Drive GET (test double)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        60
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=__3DS_FAKE_DRIVE_URL__{{ $json.request.path }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer test-double"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000019",
+      "name": "Drive POST (test double)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=__3DS_FAKE_DRIVE_URL__{{ $json.request.path }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer test-double"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request.body) }}",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000020",
+      "name": "Drive GET (Google)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        260
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://www.googleapis.com{{ $json.request.path }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "3D Studio — Google Drive"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000021",
+      "name": "Drive POST (Google)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        360
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://www.googleapis.com{{ $json.request.path }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request.body) }}",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "3D Studio — Google Drive"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000022",
+      "name": "Image file?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        480
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000022",
+              "leftValue": "={{ $json.op }}",
+              "rightValue": "upload_asset",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000023",
+      "name": "Fetch image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        440
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=__3DS_APP_BASE_URL__/api/internal/assets/{{ $json.asset_id }}?format=png",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "3D Studio — App callback token"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000024",
+      "name": "Image fetch failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        560
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// The studio's own storage didn't return the image: retried like any other failure.\nconst err = $input.first().json;\nconst status = Number(err.error?.httpCode ?? err.error?.status ?? 0);\nreturn [{ json: { result: status === 404 ? { statusCode: 404, body: { error: { message: 'asset not found' } }, source: 'app' } : { transportError: String(err.error?.message ?? err.message ?? 'asset fetch failed') } } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000025",
+      "name": "Metadata file",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        620
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const act = $('Step').last().json;\nconst text = JSON.stringify(act.metadata, null, 2);\nreturn [{ json: { data_base64: Buffer.from(text, 'utf8').toString('base64'), mime_type: 'application/json', file_name: act.file_name } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000026",
+      "name": "File content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        440
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const act = $('Step').last().json;\nconst j = $input.first().json;\nreturn [{ json: { data_base64: j.data_base64, mime_type: j.mime_type || 'image/png', file_name: act.file_name } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000027",
+      "name": "To file",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        3080,
+        520
+      ],
+      "parameters": {
+        "operation": "toBinary",
+        "sourceProperty": "data_base64",
+        "binaryPropertyName": "data",
+        "options": {
+          "fileName": "={{ $json.file_name }}",
+          "mimeType": "={{ $json.mime_type }}"
+        }
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000028",
+      "name": "Test double? (upload)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3300,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000028",
+              "leftValue": "={{ $('Step').last().json.state.mode === 'test' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000029",
+      "name": "Upload (test double)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        440
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=__3DS_FAKE_DRIVE_URL__{{ $('Step').last().json.request.path }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer test-double"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000030",
+      "name": "Upload (Google)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        600
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://www.googleapis.com{{ $('Step').last().json.request.path }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "3D Studio — Google Drive"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000031",
+      "name": "Apply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/* @include lib/drive.cjs */\n\n// Records what Drive answered for the current item (and decides retries).\nconst act = $('Step').last().json;\nconst r = $input.first().json;\nlet result;\nif (r.result) result = r.result;\nelse if (r.statusCode !== undefined) result = { statusCode: r.statusCode, body: r.body };\nelse result = { transportError: String(r.error?.message ?? r.message ?? r.error?.description ?? 'request failed') };\nreturn [{ json: applyResult(act.state, act.item_key, result) }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000032",
+      "name": "Record item",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3960,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM save_drive_item(NULLIF($1, '')::uuid, $2::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.persist.key === 'root' ? '' : $json.state.project_id, JSON.stringify($json.persist) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000033",
+      "name": "Backoff?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4180,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000033",
+              "leftValue": "={{ $('Apply').last().json.delay_seconds > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000034",
+      "name": "Drive backoff",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        4400,
+        300
+      ],
+      "parameters": {
+        "amount": "={{ $('Apply').last().json.delay_seconds }}",
+        "unit": "seconds"
+      },
+      "webhookId": "6d7e8f90-1234-4c5d-8e6f-7a8b9c0d1e10"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000035",
+      "name": "All uploaded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        40
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000035",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000036",
+      "name": "Complete export",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2420,
+        -20
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM complete_drive_export($1::uuid, $2::uuid, $3::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.state.project_id, $json.state.export_id, JSON.stringify({ ...$json.summary, n8nExecutionId: $execution.id }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000037",
+      "name": "Completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        -20
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1a1e0c2-c0de-4000-8000-000000000037",
+              "leftValue": "={{ $json.outcome }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000038",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        -40
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000039",
+      "name": "Export failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const fin = $('Step').last().json;\nconst failed = fin.summary?.failed ?? [];\nconst auth = failed.find((f) => /credentials/.test(f.error ?? ''));\nconst reason = auth?.error ?? (failed.length ? `${failed.length} of ${fin.summary.total} items couldn't be uploaded. Retry to upload them; everything else is kept.` : 'The package could not be completed. Retry to continue.');\nreturn [{ json: { project_id: fin.state.project_id, export_id: fin.state.export_id, reason, summary: fin.summary } }];"
+      }
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000040",
+      "name": "Mark export failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2860,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM fail_drive_export($1::uuid, $2::uuid, $3, $4::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.export_id, $json.reason, JSON.stringify({ n8nExecutionId: $execution.id, failedItems: $json.summary.failed, done: $json.summary.done, total: $json.summary.total }) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "name": "3D Studio — App DB"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "a1a1e0c2-0010-4a3f-9d10-000000000041",
+      "name": "Fail: drive",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        100
+      ],
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "=Drive export incomplete: {{ $('Export failed').last().json.reason }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate request": {
+      "main": [
+        [
+          {
+            "node": "Request valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request valid?": {
+      "main": [
+        [
+          {
+            "node": "Start export",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 422 Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start export": {
+      "main": [
+        [
+          {
+            "node": "Prepare response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 503 Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 503 Database": {
+      "main": [
+        [
+          {
+            "node": "Fail: database unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare response": {
+      "main": [
+        [
+          {
+            "node": "Respond to caller",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to caller": {
+      "main": [
+        [
+          {
+            "node": "Started?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Started?": {
+      "main": [
+        [
+          {
+            "node": "Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Plan": {
+      "main": [
+        [
+          {
+            "node": "Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Step": {
+      "main": [
+        [
+          {
+            "node": "Finished?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finished?": {
+      "main": [
+        [
+          {
+            "node": "All uploaded?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API call?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API call?": {
+      "main": [
+        [
+          {
+            "node": "Test double? (api)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Image file?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test double? (api)": {
+      "main": [
+        [
+          {
+            "node": "Create? (test)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create? (Google)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create? (test)": {
+      "main": [
+        [
+          {
+            "node": "Drive POST (test double)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Drive GET (test double)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create? (Google)": {
+      "main": [
+        [
+          {
+            "node": "Drive POST (Google)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Drive GET (Google)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive GET (test double)": {
+      "main": [
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive POST (test double)": {
+      "main": [
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive GET (Google)": {
+      "main": [
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive POST (Google)": {
+      "main": [
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image file?": {
+      "main": [
+        [
+          {
+            "node": "Fetch image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Metadata file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch image": {
+      "main": [
+        [
+          {
+            "node": "File content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Image fetch failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image fetch failed": {
+      "main": [
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File content": {
+      "main": [
+        [
+          {
+            "node": "To file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Metadata file": {
+      "main": [
+        [
+          {
+            "node": "To file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "To file": {
+      "main": [
+        [
+          {
+            "node": "Test double? (upload)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test double? (upload)": {
+      "main": [
+        [
+          {
+            "node": "Upload (test double)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upload (Google)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload (test double)": {
+      "main": [
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload (Google)": {
+      "main": [
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply": {
+      "main": [
+        [
+          {
+            "node": "Record item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record item": {
+      "main": [
+        [
+          {
+            "node": "Backoff?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backoff?": {
+      "main": [
+        [
+          {
+            "node": "Drive backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive backoff": {
+      "main": [
+        [
+          {
+            "node": "Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All uploaded?": {
+      "main": [
+        [
+          {
+            "node": "Complete export",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Export failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete export": {
+      "main": [
+        [
+          {
+            "node": "Completed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Export failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Completed?": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Export failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export failed": {
+      "main": [
+        [
+          {
+            "node": "Mark export failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark export failed": {
+      "main": [
+        [
+          {
+            "node": "Fail: drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 1140
+  }
+}
