@@ -25,6 +25,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import {
+  ASSET_KINDS,
   CONCEPT_STATUSES,
   FINAL_DESIGN_STATUSES,
   PROJECT_EVENT_TYPES,
@@ -47,6 +48,7 @@ export const viewType = pgEnum("view_type", VIEW_TYPES);
 export const viewStatus = pgEnum("view_status", VIEW_STATUSES);
 export const projectEventType = pgEnum("project_event_type", PROJECT_EVENT_TYPES);
 export const workflowEntity = pgEnum("workflow_entity", WORKFLOW_ENTITIES);
+export const assetKind = pgEnum("asset_kind", ASSET_KINDS);
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
@@ -90,6 +92,41 @@ export const projects = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// assets (images stored in application-controlled storage)
+// ---------------------------------------------------------------------------
+
+export const assets = pgTable(
+  "assets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    kind: assetKind("kind").notNull(),
+    /** Path inside ASSET_STORAGE_DIR (content-addressed: <project>/<sha256>.<ext>). */
+    storageKey: text("storage_key").notNull(),
+    mimeType: text("mime_type").notNull(),
+    bytes: integer("bytes").notNull(),
+    width: integer("width"),
+    height: integer("height"),
+    sha256: text("sha256").notNull(),
+    provider: text("provider"),
+    model: text("model"),
+    providerRequestId: text("provider_request_id"),
+    /** Provider-hosted URL, if the provider returned one (may expire; never used for display). */
+    providerUrl: text("provider_url"),
+    prompt: text("prompt"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check("assets_bytes_positive", sql`${t.bytes} > 0`),
+    check("assets_mime_image", sql`${t.mimeType} in ('image/png', 'image/jpeg', 'image/webp')`),
+    index("assets_project_idx").on(t.projectId),
+    index("assets_sha256_idx").on(t.sha256),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // concepts
 // ---------------------------------------------------------------------------
 
@@ -111,6 +148,17 @@ export const concepts = pgTable(
     generationPrompt: text("generation_prompt"),
     /** Storage key or URL of the current concept image (null until generated). */
     imageUrl: text("image_url"),
+    imageAssetId: uuid("image_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    /** Client-safe reason the last image generation failed (status FAILED). */
+    imageError: text("image_error"),
+    /** When the current image generation was requested (detects stuck jobs). */
+    imageRequestedAt: timestamp("image_requested_at", { withTimezone: true }),
+    /**
+     * The concept's current version: null = the original image (revision 0), else a READY revision of
+     * this concept. Set when a refinement completes and by "Use this version". Composite FK
+     * (active_revision_id, id) -> revisions(id, concept_id) is in migration 0007 (circular reference).
+     */
+    activeRevisionId: uuid("active_revision_id"),
     status: conceptStatus("status").notNull().default("GENERATING"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -144,6 +192,16 @@ export const revisions = pgTable(
     interpretedInstruction: jsonb("interpreted_instruction").$type<Record<string, unknown>>(),
     generationPrompt: text("generation_prompt"),
     imageUrl: text("image_url"),
+    imageAssetId: uuid("image_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    /**
+     * The version this revision was edited from (null = the original concept image). Forms the revision
+     * chain. Composite FK (base_revision_id, concept_id) -> revisions(id, concept_id) is in migration 0007.
+     */
+    baseRevisionId: uuid("base_revision_id"),
+    /** Client-safe reason the refinement failed (status FAILED). */
+    errorReason: text("error_reason"),
+    /** When an n8n run claimed this revision (prevents a duplicate webhook from paying twice). */
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
     status: revisionStatus("status").notNull().default("GENERATING"),
     createdAt: createdAt(),
   },
@@ -185,6 +243,13 @@ export const finalDesigns = pgTable(
     approvedRevisionId: uuid("approved_revision_id"),
     /** Storage key or URL of the approved master image (concept or revision image). */
     masterImage: text("master_image").notNull(),
+    /** The stored image behind master_image (n8n gives it to Claude and the image model as the reference). */
+    masterAssetId: uuid("master_asset_id").references(() => assets.id, { onDelete: "restrict" }),
+    /**
+     * Claude's canonical per-view instructions ({ design_summary, invariants, front_prompt, back_prompt,
+     * left_prompt, right_prompt }), written once; every view (and regeneration) uses them.
+     */
+    viewPrompts: jsonb("view_prompts").$type<Record<string, unknown>>(),
     status: finalDesignStatus("status").notNull().default("PENDING"),
     createdAt: createdAt(),
     /** Set by trigger when status becomes FINALIZED. */
@@ -234,6 +299,13 @@ export const finalViews = pgTable(
     versionNumber: integer("version_number").notNull().default(1),
     isCurrent: boolean("is_current").notNull().default(true),
     imageUrl: text("image_url"),
+    imageAssetId: uuid("image_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    /** The instruction the image model received for this version (from the final design's view prompts). */
+    generationPrompt: text("generation_prompt"),
+    /** Client-safe reason the view failed (status FAILED). */
+    errorReason: text("error_reason"),
+    /** When n8n claimed this view's image job. */
+    imageRequestedAt: timestamp("image_requested_at", { withTimezone: true }),
     driveFileId: text("drive_file_id"),
     status: viewStatus("status").notNull().default("GENERATING"),
     createdAt: createdAt(),
@@ -283,6 +355,71 @@ export const projectEvents = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Google Drive delivery
+// ---------------------------------------------------------------------------
+
+/** One run of the Drive export workflow. At most one RUNNING per project (duplicate webhooks wait). */
+export const driveExports = pgTable(
+  "drive_exports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("RUNNING"),
+    /** "live" (Google Drive) or "test" (local Drive test double). */
+    mode: text("mode").notNull(),
+    errorReason: text("error_reason"),
+    summary: jsonb("summary").$type<Record<string, unknown>>(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("drive_exports_status", sql`${t.status} in ('RUNNING', 'COMPLETED', 'FAILED')`),
+    check("drive_exports_mode", sql`${t.mode} in ('live', 'test')`),
+    uniqueIndex("drive_exports_one_running_per_project").on(t.projectId).where(sql`${t.status} = 'RUNNING'`),
+    index("drive_exports_project_idx").on(t.projectId, t.startedAt),
+  ],
+);
+
+/**
+ * Every Drive folder/file the studio created, identified by (project, item_key), never by its name:
+ * "root" (project null), "folder:project", "folder:01_CONCEPTS", "file:MASTER", "file:FRONT", "file:METADATA", …
+ * The same key is written to the Drive item's appProperties so a lost ID can be found again.
+ */
+export const driveItems = pgTable(
+  "drive_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Null only for the shared "3D PROJECTS" root folder. */
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    itemKey: text("item_key").notNull(),
+    kind: text("kind").notNull(),
+    /** Display name in Drive (safe filename); informational only. */
+    name: text("name").notNull(),
+    driveFileId: text("drive_file_id"),
+    driveUrl: text("drive_url"),
+    /** The stored image this file is made from, and the one whose bytes were last uploaded. */
+    sourceAssetId: uuid("source_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    uploadedAssetId: uuid("uploaded_asset_id"),
+    status: text("status").notNull().default("PENDING"),
+    errorReason: text("error_reason"),
+    attempts: integer("attempts").notNull().default(0),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    check("drive_items_kind", sql`${t.kind} in ('FOLDER', 'FILE')`),
+    check("drive_items_status", sql`${t.status} in ('PENDING', 'DONE', 'FAILED')`),
+    check("drive_items_done_has_id", sql`${t.status} <> 'DONE' or ${t.driveFileId} is not null`),
+    uniqueIndex("drive_items_project_key")
+      .on(sql`coalesce(${t.projectId}, '00000000-0000-0000-0000-000000000000'::uuid)`, t.itemKey),
+    index("drive_items_drive_file_idx").on(t.driveFileId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // workflow_status_transitions (reference data read by the transition trigger)
 // ---------------------------------------------------------------------------
 
@@ -303,3 +440,6 @@ export type Revision = typeof revisions.$inferSelect;
 export type FinalDesign = typeof finalDesigns.$inferSelect;
 export type FinalView = typeof finalViews.$inferSelect;
 export type ProjectEvent = typeof projectEvents.$inferSelect;
+export type Asset = typeof assets.$inferSelect;
+export type DriveExport = typeof driveExports.$inferSelect;
+export type DriveItem = typeof driveItems.$inferSelect;

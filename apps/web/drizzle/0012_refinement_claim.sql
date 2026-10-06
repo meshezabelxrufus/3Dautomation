@@ -1,0 +1,1 @@
+ALTER TABLE "revisions" ADD COLUMN "claimed_at" timestamp with time zone;
