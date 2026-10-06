@@ -2,10 +2,31 @@
 
 **Product:** AI-powered 3D design ideation & approval platform
 **Scope of this document:** Milestone 1 (idea → concepts → refinement → final design → 4 views → Google Drive)
-**Status:** Proposed — audit complete, no implementation started
-**Date:** 2026-10-04
+**Status:** Implemented (Milestone 1), production-readiness audit 2026-10-06; see "As built" below
+**Date:** 2026-10-04 (plan), updated 2026-10-06
 
 ---
+
+## As built (end of Milestone 1)
+
+The plan below was written before implementation. Where the implementation differs, this section wins.
+
+| Area | Plan | As built |
+|---|---|---|
+| Orchestration | n8n per job type | 7 workflows ([`N8N-WORKFLOWS.md`](./N8N-WORKFLOWS.md)): project-create, concepts-generate (+ concept-image-generate per concept), concept-refine, views-generate (+ view-image-generate per view), drive-export |
+| State | DB-enforced state machine | As planned, plus PostgreSQL functions for every transition (migrations 0003–0013); n8n calls only these. Claims prevent duplicate paid work |
+| Callbacks | n8n → BFF callbacks for results | n8n writes results through DB functions; the app is called back only to **store images** (`/api/internal/assets`, bearer token) |
+| Images | Nano Banana | Provider switch: `IMAGE_PROVIDER=gemini` (Nano Banana, not exercised: no key) or `pollinations` (used for live tests) |
+| Refinement | New version per refinement | Explicit revision chain (`base_revision_id`, `active_revision_id`), Claude sees the current image and separates change vs preserve |
+| Final design | Canonical master | Immutable after finalize (trigger); per-view instructions written once (`view_prompts`); views always generated from the master |
+| Drive | OAuth user credential, idempotent export | As planned: `drive_items` + `drive_exports` + appProperties tags; verified against a Drive v3 test double; live Google not yet exercised |
+| Authentication | Better Auth, per-user ownership (§9.1) | **Not built.** Milestone 1 ships a single-password **studio access gate** (signed HttpOnly session cookie, `proxy.ts`). Per-user accounts/ownership remain open (D1) |
+| Rate limits / cost caps (§9.4) | Per-user limits, usage ledger | **Not built.** Bounded retries, 2–5 concepts per request, claims against duplicates |
+| Security headers (§9.4) | CSP etc. | Built (`next.config.ts`) |
+| Signed asset URLs | `ASSET_URL_SIGNING_SECRET` | Not built: assets are served by unguessable content IDs behind the access gate |
+
+Docs: [`DEVELOPMENT.md`](./DEVELOPMENT.md) (setup, operations), [`API.md`](./API.md), [`GOOGLE-DRIVE.md`](./GOOGLE-DRIVE.md),
+[`TESTING.md`](./TESTING.md) (results, known issues, limitations).
 
 ## Table of contents
 
@@ -369,12 +390,12 @@ All names carry the `[3D Studio]` prefix and the tag `3d-automation`. All webhoo
 
 | ID | Workflow name | Trigger | Purpose |
 |---|---|---|---|
-| `WF-01` | `[3D Studio] M1 · Concepts — generate` | Webhook `POST /webhook/3d-studio/concepts-generate` | Brief → Claude (N concepts) → Nano Banana (N images) → callbacks |
+| `WF-01` | `[3D Studio] M1 · Concepts — generate` | Webhook `POST /webhook/3d-studio/concepts-generate` | Brief → Claude (N concepts) → save texts → fan out one `SUB-02` job per concept → wait → close the batch |
 | `WF-02` | `[3D Studio] M1 · Concept — refine` | Webhook `POST /webhook/3d-studio/concept-refine` | Refinement text + current image → Claude (structured edit) → Nano Banana edit → callback |
 | `WF-03` | `[3D Studio] M1 · Views — generate` | Webhook `POST /webhook/3d-studio/views-generate` | Final design → Claude (spec + per-view prompts) → Nano Banana ×(1–4) with reference image → callbacks |
 | `WF-04` | `[3D Studio] M1 · Drive — export` | Webhook `POST /webhook/3d-studio/drive-export` | Fetch approved assets → create Drive folders → upload → write `manifest.json` last → callback |
 | `SUB-01` | `[3D Studio] sub · Claude structured` | Execute Workflow | Calls the Anthropic Messages API with a JSON schema (tool use / structured output), validates, retries once on schema failure |
-| `SUB-02` | `[3D Studio] sub · Nano Banana image` | Execute Workflow | Calls Gemini `generateContent` with text and 0–N reference images. Extracts the inline image. Handles safety blocks, empty responses and 429/5xx with backoff |
+| `SUB-02` | `[3D Studio] M1 · Concept image — generate` | Webhook `POST /webhook/3d-studio/concept-image-generate` (called by WF-01 per concept, and by the BFF for a retry) | Calls Gemini `generateContent`. Extracts the inline image. Handles safety blocks, empty responses and 429/5xx with backoff. Uploads the bytes to the app's asset storage. One execution per concept, so one failure never affects the others |
 | `SUB-03` | `[3D Studio] sub · App callback` | Execute Workflow | POSTs a typed event (JSON or multipart with image) to the BFF with callback credentials. Retries with backoff |
 | `SUB-04` | `[3D Studio] sub · Fetch asset` | Execute Workflow | GETs an input image from the BFF's signed internal asset URL as binary |
 | `SUB-05` | `[3D Studio] sub · Mock provider` | Execute Workflow | Returns fixture text/images when `providerMode = "mock"` |
@@ -952,10 +973,10 @@ These requirements assume "H3D" is a multi-view image-to-3D model such as Tencen
 | 3 | ✅ DB schema + migrations, workflow state machine (DB-enforced) + services + tests (done 2026-10-04 as "Step 2"). Better Auth moves to a later step | 71 tests green |
 | 4 | `packages/contracts` + job dispatch/callback infrastructure + asset storage + signed URLs + mock n8n stub | Callback integration tests green |
 | 5 | ✅ (partly, "Step 4", 2026-10-04) `scripts/n8n-deploy.mjs` (credentials, deploy, status, dry-run, backups) + project-create workflow. Still to do: export script, `WF-99` error handler, shared-instance user. Original scope: Guarded `n8n-deploy` / `n8n-export` scripts (§6.6–6.7) with `--dry-run` and pre-deploy backup. `[3D Studio]` credentials created in the shared instance under the `3d-automation` user. Sub-workflows `SUB-01..05`, error handler `WF-99` deployed **inactive** | Dry-run reviewed. All pre-existing workflows unchanged (before/after diff of the backup). Our workflows deployed |
-| 6 | `WF-01` concepts + concepts UI (cards, approve/reject, generate more) | Mock E2E part 1. **UI done 2026-10-04 ("Step 3")**. **WF-01 done 2026-10-05 ("Step 5")**: Claude concepts via n8n with repair/retry, DB functions for the transitions, mock provider. Images (Nano Banana) are a later step |
-| 7 | `WF-02` refinement + version history UI | Mock E2E part 2 |
-| 8 | `WF-03` four views + views review/regenerate/approve UI | Mock E2E part 3; live multi-view consistency spike |
-| 9 | `WF-04` Drive export + manifest + delivered UI | Drive structure verified on test folder |
+| 6 | `WF-01` concepts + concepts UI (cards, approve/reject, generate more) | Mock E2E part 1. **UI done 2026-10-04 ("Step 3")**. **WF-01 done 2026-10-05 ("Step 5")**: Claude concepts via n8n with repair/retry, DB functions for the transitions, mock provider. **Images done 2026-10-05 ("Step 6")**: per-concept Nano Banana jobs (SUB-02), app-owned asset storage, partial failure + per-concept retry, gallery actions (approve/refine/reject/restore) |
+| 7 | `WF-02` refinement + version history UI | Mock E2E part 2. **WF-02 done 2026-10-05 ("Step 6")**: Claude edit interpretation + Nano Banana image edit, revisions kept. **Revision chain done 2026-10-05 ("Step 7")**: base/active version links, server-side validation of project + concept + version, Claude sees the current image and separates change vs preserve, retry in place, revision history UI with "Use this version" |
+| 8 | `WF-03` four views + views review/regenerate/approve UI | Mock E2E part 3; live multi-view consistency spike. **Done 2026-10-05 ("Step 8")**: canonical final design (immutable, idempotent finalize), Claude per-view instructions written once from the master image, four independent view jobs from the master image, per-view retry/regenerate with version history, approve all → UPLOADING_TO_DRIVE |
+| 9 | `WF-04` Drive export + manifest + delivered UI | Drive structure verified on test folder. **Done 2026-10-05 ("Step 9")**: idempotent export (stored IDs + appProperties tags + run lock), per-item retry, project.json, completion screen; verified against a local Drive v3 test double; live Google Drive needs the OAuth credential connected in n8n |
 | 10 | Hardening: rate limits, cost caps, security headers, logging, a11y, live smoke test, ops README | Acceptance criteria §13.3 |
 | 11 | Production promotion: provision or confirm the VPS n8n (same version), create `3d-automation` user + credentials there, `deploy --env production --dry-run` → deploy → smoke tests | Same workflow files run on the VPS unchanged |
 

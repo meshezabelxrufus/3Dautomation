@@ -1,7 +1,33 @@
 # Development Guide
 
 How to install, configure, run and inspect the local stack for the 3D Design Studio (Milestone 1).
-Architecture background: [`MILESTONE-1-ARCHITECTURE.md`](./MILESTONE-1-ARCHITECTURE.md).
+
+| Document | Contents |
+|---|---|
+| [`MILESTONE-1-ARCHITECTURE.md`](./MILESTONE-1-ARCHITECTURE.md) | Architecture, decisions, data model |
+| [`N8N-WORKFLOWS.md`](./N8N-WORKFLOWS.md) | Every workflow, conventions, credentials, operating |
+| [`API.md`](./API.md) | Read API, Server Actions, internal API, webhooks, DB functions |
+| [`GOOGLE-DRIVE.md`](./GOOGLE-DRIVE.md) | Drive structure, idempotency, OAuth setup, test double |
+| [`TESTING.md`](./TESTING.md) | Tests, mock scenarios, audit results, known issues and limitations |
+
+## Quick start (fresh machine)
+
+```bash
+sh scripts/init-env.sh                           # creates .env with generated secrets (upgrading: --add-missing)
+pnpm install
+docker compose up -d --build                     # postgres, migrate, n8n, web (+ fake-drive with the drive-test profile)
+```
+
+1. Open n8n at http://localhost:5680, create the owner account, then **Settings → n8n API → Create an API key** and
+   put it in `.env` as `N8N_DEPLOY_API_KEY_LOCAL`.
+2. Keys: set `ANTHROPIC_API_KEY` and either `GEMINI_API_KEY` (`IMAGE_PROVIDER=gemini`) or `POLLINATIONS_API_KEY`
+   (`IMAGE_PROVIDER=pollinations`) in `.env`, or enter them later in the n8n credentials. For a run without any
+   keys use `AI_PROVIDER_MODE=mock`.
+3. Google Drive: follow [`GOOGLE-DRIVE.md`](./GOOGLE-DRIVE.md), or use the test double (`COMPOSE_PROFILES=n8n,drive-test`,
+   `DRIVE_MODE=test`).
+4. `pnpm n8n:credentials && pnpm n8n:deploy`, then `docker compose up -d` (picks up `.env` changes).
+5. Set `STUDIO_ACCESS_PASSWORD` if the app is reachable from anywhere but this machine.
+6. `sh scripts/verify-stack.sh`, then open http://localhost:3100.
 
 ## Contents
 
@@ -35,6 +61,7 @@ Architecture background: [`MILESTONE-1-ARCHITECTURE.md`](./MILESTONE-1-ARCHITECT
 | `web` | built from `apps/web/Dockerfile` (Next.js 16, standalone) | http://localhost:3100 | `http://web:3000` | `assets_data` → `/data/assets` |
 | `n8n` | `n8nio/n8n:2.32.6` | http://localhost:5680 | `http://n8n:5678` | `n8n_data` → `/home/node/.n8n` |
 | `postgres` | `postgres:16-alpine` | `localhost:5434` | `postgres:5432` | `pg_data` → `/var/lib/postgresql/data` |
+| `fake-drive` (profile `drive-test`, development only) | `node:22-alpine` + `infra/fake-drive/server.mjs` | http://localhost:4010 | `http://fake-drive:4010` | none (in memory) |
 | `migrate` (one-shot) | `migrator` target of `apps/web/Dockerfile` | — | — | — |
 
 - **Postgres** hosts two isolated databases:
@@ -236,7 +263,14 @@ For fast UI iteration, run Next.js on your machine against the Dockerised Postgr
    ```dotenv
    DATABASE_URL=postgres://app_user:<APP_DB_PASSWORD>@localhost:5434/app
    N8N_WEBHOOK_BASE_URL=http://localhost:5680
+   N8N_WEBHOOK_TOKEN=<N8N_WEBHOOK_TOKEN from .env>
+   N8N_CALLBACK_TOKEN=<N8N_CALLBACK_TOKEN from .env>
    ```
+
+   Generated images are stored by whichever app n8n calls back. To have them land in the dev server's
+   storage (`apps/web/.data/assets`) instead of the `web` container's volume, set
+   `N8N_APP_BASE_URL=http://host.docker.internal:3101` in `.env` and run `pnpm n8n:deploy`. Set it back to
+   `http://web:3000` afterwards.
 
 2. Start the dev server:
 
@@ -309,6 +343,11 @@ Then run `docker compose up -d` again. The databases are re-created by the init 
 | `web` is `unhealthy` | `docker compose logs web` and `curl localhost:3100/api/health`. Usually Postgres is not ready or `DATABASE_URL` credentials don't match the initialised database |
 | Docker build fails at `pnpm install --frozen-lockfile` | `pnpm-lock.yaml` is out of date. Run `pnpm install` on the host and commit the lockfile |
 | `migrate` exited with a non-zero code and `web` doesn't start | `docker compose logs migrate`. Usually a migration error or a database connection problem. Fix it, then `docker compose up -d` again |
+| Builds fail with `ENOSPC` / Docker Desktop stops | The disk is full. Repeated image builds grow Docker's build cache: `docker builder prune` (cache only, no data) and `docker image prune` (dangling images). Check with `docker system df` |
+| Every page redirects to `/login` | `STUDIO_ACCESS_PASSWORD` is set: sign in with it. `503 misconfigured` means `STUDIO_SESSION_SECRET` is missing or shorter than 32 characters |
+| Sign-in loops back to `/login` behind HTTPS | Set `SESSION_COOKIE_SECURE=true` or make the proxy send `X-Forwarded-Proto: https` |
+| A job shows "Generating…" for a long time | Open/refresh the project: lazy recovery fails jobs whose n8n execution died (concepts 26 min, images/refinements 11 min, views 31 min, Drive 21 min) and offers a retry. Check the execution in the n8n UI |
+| "The studio's database is temporarily unavailable" | Postgres is down or restarting: `docker compose ps`, `docker compose logs postgres`. The app recovers by itself |
 
 ## 16. Database schema and migrations
 
@@ -367,6 +406,9 @@ pnpm --filter @three-d/web test
 | `tests/db/foreign-keys.test.ts` | FK rejections, cross-project FKs, cascades |
 | `tests/db/state-transitions.test.ts` | Invalid transitions and guards, via raw SQL and via services |
 | `tests/workflow/lifecycle.test.ts` | Full brief → COMPLETED lifecycle with the exact event sequence, failure and retry paths |
+| `tests/db/concept-*`, `revision-chain`, `final-views`, `drive-delivery` | The Step 5–9 database functions (see `docs/TESTING.md`) |
+| `tests/n8n/*` | The logic n8n runs (`n8n/lib/*.cjs`) and the workflow JSON conventions |
+| `tests/http/*` | Access gate and API error mapping |
 
 ## 18. Frontend
 
@@ -480,10 +522,12 @@ See `n8n/README.md` for the rules and options.
 
 ```
 web → n8n: start_concept_generation()  (project → GENERATING_CONCEPTS + event)
-    → 202 straight away (the workspace shows "Generating concepts…" and polls)
+    → 202 straight away (the workspace shows "Writing concepts…" and polls)
     → Claude (structured JSON, up to 3 attempts) → validate
-    → complete_concept_generation()  (concepts + event + project → CONCEPT_REVIEW, atomically)
-    or fail_concept_generation()     (project → FAILED with a client-safe reason + event)
+    → save_concept_texts()           (concepts appear as GENERATING; project stays GENERATING_CONCEPTS)
+    → one image job per concept (§21), all in parallel → wait until none is GENERATING
+    → finish_concept_generation()    (leftovers FAILED, event, project → CONCEPT_REVIEW)
+    or fail_concept_generation()     (Claude failed: project → FAILED with a client-safe reason + event)
 ```
 
 - **Model:** `CLAUDE_MODEL` (default `claude-sonnet-5-5`) with effort `CLAUDE_EFFORT` (default `high`). JSON output is constrained with `output_config.format` (`json_schema`). Refusal fallback is on (`fallbacks: "default"`).
@@ -494,8 +538,8 @@ web → n8n: start_concept_generation()  (project → GENERATING_CONCEPTS + even
   4. **Structured repair:** if invalid, Claude is shown its own output plus the errors.
 
   Overloaded or failed API calls are retried with backoff. Auth errors and refusals fail immediately.
-- **Database state:** it changes only through the three database functions (migration 0003), so it's atomic and rule-checked. A double click can't start two runs. A generation n8n never finished (crash or restart) is marked FAILED after 16 minutes, the next time the project is opened.
-- **No images yet:** concepts arrive as structured text and display as "concept sheets". Refinement and final approval stay disabled until images exist.
+- **Database state:** it changes only through the three database functions (migration 0003), so it's atomic and rule-checked. A double click can't start two runs. A generation n8n never finished (crash or restart) is marked FAILED after 26 minutes, the next time the project is opened.
+- **Images:** see §21.
 
 **API key:** enter it in n8n, in the credential **"3D Studio — Anthropic"**. Alternatively set `ANTHROPIC_API_KEY` in `.env` and run `pnpm n8n:credentials`.
 
@@ -517,3 +561,226 @@ Other `AI_MOCK_SCENARIO` values reproduce failures:
 
 Each n8n execution is listed in the n8n UI. A failed generation also shows as a **failed** execution there, with the technical detail.
 
+## 21. Concept images with Nano Banana
+
+Every concept gets its own n8n execution of `[3D Studio] M1 · Concept image — generate`
+(`3d-studio/concept-image-generate`). Nano Banana (Gemini `generateContent`, model `IMAGE_MODEL`, default
+`gemini-3.1-flash-image`) is called **only from n8n**. The key lives in the n8n credential
+**"3D Studio — Gemini"**, never in the web app or the browser.
+
+```
+start_concept_image()      claim the job (GENERATING; a retry moves FAILED → GENERATING) → 202
+→ Nano Banana (up to 3 attempts; 429/5xx/no image retried, auth/blocked fail at once)
+→ POST {app}/api/internal/assets   n8n uploads the bytes (Authorization: Bearer N8N_CALLBACK_TOKEN)
+                                   the app validates PNG/JPEG/WebP, stores it content-addressed, returns asset_id
+→ complete_concept_image()  concept READY, image_url = /api/assets/<asset_id>, event
+or fail_concept_image()     concept FAILED with a client-safe reason, event
+```
+
+- **Isolation:** one failed image never affects the others. If concept 3 of 5 fails, 1, 2, 4 and 5 stay
+  READY, 3 shows its reason and a **Retry image** button. Retry runs the same workflow for that concept only.
+- **Storage:** images are never served from provider URLs. The `assets` table records storage key, size,
+  dimensions, SHA-256, provider, model, provider request id (`responseId`), prompt and time. Files live in
+  `ASSET_STORAGE_DIR` (Docker volume `assets_data`; `apps/web/.data/assets` for the dev server) and are served
+  by `GET /api/assets/<id>` with immutable caching.
+- **Recovery:** an image job or refinement whose n8n execution died is marked FAILED (retryable) after
+  11 minutes, the next time the project is read.
+- **Deploy-time URLs:** n8n reaches the app at `N8N_APP_BASE_URL` (default `http://web:3000`) and itself at
+  `N8N_SELF_URL` (default `http://127.0.0.1:5678`). Both are baked into the workflows by `pnpm n8n:deploy`,
+  so a caller can't redirect n8n (or the callback token) elsewhere.
+
+**Concept actions** (gallery card and detail view; nothing is ever deleted):
+
+| Action | Effect |
+|---|---|
+| Approve | READY → SELECTED (click again to undo) |
+| Reject | → REJECTED; the card dims and offers **Restore** (→ READY) |
+| Refine | Opens the concept with the feedback field focused (see §22) |
+| Approve as final design | In the detail view, once an image exists |
+
+**API key:** enter it in n8n, in the credential **"3D Studio — Gemini"**, or set `GEMINI_API_KEY` in `.env`
+and run `pnpm n8n:credentials`. Without a key every image fails with "check the Gemini API key", and the
+concepts stay usable.
+
+**Testing without a Gemini key (Pollinations):** Gemini's image models have no free API tier. To exercise
+the real flow (Claude concepts, rendered images, storage, retry, refinement edits) without one, switch the
+image provider to [Pollinations](https://pollinations.ai). It needs a key from
+https://enter.pollinations.ai/keys (new accounts get a free allowance; images cost fractions of a "pollen").
+
+```dotenv
+IMAGE_PROVIDER=pollinations
+POLLINATIONS_API_KEY=sk_...
+# optional, default black-forest-labs/flux.2-klein-4b (generation + edits)
+POLLINATIONS_MODEL=
+```
+
+Then run `pnpm n8n:credentials` (syncs the key to the n8n credential **"3D Studio — Pollinations"**) and
+recreate the web container (`docker compose up -d web`), or restart the dev server with the same settings in
+`apps/web/.env.local`. No workflow redeploy needed: the provider travels with each request.
+
+Concepts use `POST https://gen.pollinations.ai/v1/images/generations`; refinements use `/v1/images/edits` with
+the current image, so they're real edits like Nano Banana's. Images are recorded with provider
+`pollinations` and the model id. When the Pollinations balance runs out, images fail with "balance is used
+up" (retryable after a top-up). Switch back with `IMAGE_PROVIDER=gemini` once you have a Gemini key.
+
+**Mock mode:** with `AI_PROVIDER_MODE=mock`, `AI_IMAGE_MOCK_SCENARIO` picks the image behaviour:
+
+| Scenario | Outcome |
+|---|---|
+| `ok` (default) | Every image renders |
+| `slow` | Each image takes ~12 s |
+| `fail:<n>` | Concept *n* fails; **Retry image** then succeeds |
+| `fail_always:<n>` | Concept *n* fails, retries too |
+| `api_error_then_ok`, `no_image_then_ok` | Rendered on attempt 2 |
+| `api_down` | Fails after 3 attempts |
+| `blocked`, `auth_error`, `model_not_found` | Fail at once |
+
+Refinement mock scenarios (via `AI_MOCK_SCENARIO`): `refine_malformed_then_ok`, `refine_refusal`.
+
+## 22. Refinement and the revision chain
+
+Opening a concept shows its **current version** large, the description, "What would you like to change?" and
+the **revision history**: Revision 0 (the original image), then every refinement in order. Older versions can be
+viewed at any time; nothing is ever overwritten or deleted.
+
+```
+web (project_id, concept_id, version the client was looking at, feedback)
+→ start_refinement()   validates all of it in one transaction, creates revision N+1 (GENERATING) linked to the
+                       current version (base_revision_id); concept + project → REFINING
+→ n8n `3d-studio/concept-refine` (project_id, concept_id, revision_id; n8n checks they belong together)
+→ load the current version: its image, its full prompt, the design record and the chain of earlier refinements
+→ Claude sees the current image + all of that and returns, as strict JSON:
+     summary · changes (what must change) · preserve (what must stay, named concretely)
+     edit_prompt (for the image model) · revised_prompt (complete description of the new version)
+→ the image model edits the current image with edit_prompt
+→ complete_refinement()  revision READY with feedback, interpretation, prompt, image; it becomes the current
+                         version; concept READY, project → CONCEPT_REVIEW
+   or fail_refinement()  revision FAILED with a client-safe reason; current version unchanged; project → CONCEPT_REVIEW
+```
+
+- **Guarding against the wrong concept or version:** every refinement carries `project_id`, `concept_id` and the
+  version the client was looking at. The database refuses a concept from another project, a version that is no
+  longer current ("a newer version exists"), and a second refinement while one runs (double clicks, two tabs).
+  Composite foreign keys keep `base_revision_id` and `active_revision_id` inside the same concept.
+- **What changes vs what stays:** Claude must list concrete `preserve` items (e.g. "dark gunmetal armour
+  plates"); a vague "everything else" is rejected and repaired. The next refinement starts from the previous
+  `revised_prompt`, so earlier changes are never undone by accident.
+- **Use this version** makes the viewed version current and approves the concept; the next refinement branches
+  from it (the other branch is kept). **Continue refining** jumps to the feedback field. **Approve as final**
+  uses the current version.
+- **Failure and retry:** a failed revision shows its reason and **Retry** (same feedback, same base version,
+  same revision number). Only the newest revision can be retried, and only while its base is still current.
+  A refinement whose n8n run died is failed after 11 minutes (lazy recovery).
+- **Stored per revision:** number, base version, feedback, Claude's interpretation (JSON), the prompt the image
+  model received, the image (asset), timestamp and status.
+
+Mock scenarios (`AI_MOCK_SCENARIO`): `refine_malformed_then_ok`, `refine_vague_preserve_then_ok`,
+`refine_down_once` (the first run of every revision fails; **Retry** succeeds), `refine_down`, `refine_refusal`.
+
+## 23. Final design and the four views
+
+**Finalize.** In a concept's view, "Finalize this version…" (or "Finalize design…" once approved) opens a
+confirmation with the exact image, concept, revision number and description. **Finalize design** runs
+`finalize_design()`: one transaction creates the final design (`project_id`, `approved_concept_id`,
+`approved_revision_id`, `master_image` + `master_asset_id`), marks the concept FINAL and moves the project to
+FINALIZING. That record is the **canonical design**: a trigger refuses any later change to its master image or
+approved concept/revision. Repeating the request (double click, two tabs) returns the same final design.
+
+**Four views** (`[3D Studio] M1 · Views — generate`, `3d-studio/views-generate`):
+
+```
+start_view_generation()  new GENERATING version per view (FINALIZING/VIEW_REVIEW -> GENERATING_VIEWS)
+→ instructions already stored?  no → Claude sees the master image + the design record and writes
+     design_summary · invariants · front_prompt · back_prompt · left_prompt · right_prompt
+     → save_view_prompts()  stored once on the final design (write-once, canonical)
+→ one `3d-studio/view-image-generate` execution per view, in parallel:
+     start_view_image() → the image model edits the MASTER image with that view's instruction
+     → stored as an asset (kind VIEW) → complete_view_image()   or fail_view_image()
+→ finish_view_generation()  all four READY → VIEW_REVIEW; otherwise the failed ones wait for a retry
+```
+
+- **View model (Pollinations):** views use `POLLINATIONS_VIEW_MODEL` (default `openai/gpt-image-1-mini`).
+  FLUX edit models keep the reference's camera angle, so all four views came out as the master angle; gpt-image
+  moves the camera while keeping the object.
+- **Same object, only the viewpoint changes:** every view is generated from the master image (never from
+  another view, never from an earlier attempt) with Claude's per-view instruction, which restates the
+  invariants and fixes camera height, distance, background and lighting.
+- **Independent views:** if LEFT fails, FRONT/BACK/RIGHT are kept; "Retry left" (or "Retry failed views")
+  creates a new LEFT version only. While generating, ready views can't be redone.
+- **Regenerate this view** (in VIEW_REVIEW): a new version of exactly that view from the master design and its
+  stored instruction; earlier versions stay in `final_views` as non-current history.
+- **Approve all views:** `approve_all_views()` approves the four current views and moves the project to
+  UPLOADING_TO_DRIVE. Google Drive delivery is the next step and isn't connected yet.
+- **Recovery:** a claimed view job that died is failed after 11 minutes; views whose instructions never
+  arrived after 31 minutes; when nothing is running and all four are ready, the project moves to review.
+
+Mock scenarios: `AI_IMAGE_MOCK_SCENARIO=fail:<n>` fails view *n* on its first version (FRONT=1, BACK=2,
+LEFT=3, RIGHT=4) and a retry succeeds; `AI_MOCK_SCENARIO=views_malformed_then_ok` / `views_down` exercise the
+Claude step.
+
+## 24. Google Drive delivery
+
+**Approve all views** moves the project to UPLOADING_TO_DRIVE and starts `[3D Studio] M1 · Drive — export`
+(`3d-studio/drive-export`). It builds:
+
+```
+3D PROJECTS/
+  <ID8> - <Project name>/
+    01_CONCEPTS/         C01 - <title>.png …
+    02_REVISIONS/        C01 - Revision 01.png …
+    03_APPROVED_DESIGN/  MASTER.png  FRONT.png  BACK.png  LEFT.png  RIGHT.png
+    04_METADATA/         project.json
+```
+
+Images are delivered as PNG (the app converts JPEG/WebP losslessly). `project.json` holds the project, client,
+brief, approved concept and revision, and the Drive file of the master image and each view. It contains no
+secrets.
+
+**How it stays idempotent:**
+- `start_drive_export()` claims a run. A second webhook while one runs gets `409 export_in_progress`; after
+  completion it gets `200 already_completed`. A run that stopped reporting for 20 minutes is replaced.
+- Every Drive folder/file is a row in `drive_items` (`project_id` + `item_key`, never its name), saved after
+  every Drive call. On the next run a stored ID is verified and reused. Each item also carries an
+  `appProperties` tag in Drive, so an item whose ID never reached the database (crash right after creating it)
+  is found again instead of duplicated. Only then is anything created.
+- File content is uploaded separately (`PATCH …?uploadType=media`). An image whose stored upload matches its
+  source asset is never uploaded again; `project.json` is rewritten in place each run.
+- Failures are per item: if LEFT fails, the rest is kept, the run ends FAILED, the project stays in
+  UPLOADING_TO_DRIVE, and **Retry upload** uploads only what's missing. When everything is there,
+  `complete_drive_export()` stores the Drive IDs on the views, records `DRIVE_UPLOAD_COMPLETED`, moves the
+  project to **COMPLETED** and records `PROJECT_COMPLETED`.
+
+**Connecting Google Drive (live):**
+1. In Google Cloud, enable the Google Drive API and create an OAuth client of type *Web application* with the
+   redirect URI `<n8n URL>/rest/oauth2-credential/callback` (locally `http://localhost:5680/rest/oauth2-credential/callback`).
+2. Put `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` in `.env` and run `pnpm n8n:credentials`
+   (or enter them directly in the n8n credential **"3D Studio — Google Drive"**).
+3. Open that credential in n8n and click **Connect my account** (Google consent screen).
+4. Set `DRIVE_MODE=live` (and optionally `DRIVE_PARENT_FOLDER_ID`) and recreate the web container.
+
+The browser never sees Google credentials: they exist only in n8n.
+
+**Developing without Google (test double):** `COMPOSE_PROFILES=n8n,drive-test` starts `fake-drive` (port 4010),
+a small Drive v3 stand-in (`infra/fake-drive/server.mjs`). With `DRIVE_MODE=test` uploads go there. Use its admin
+endpoints to inject failures, e.g.
+`curl -X POST localhost:4010/__admin/fail -d '{"op":"upload","match":"LEFT.png","status":503,"times":99}'`
+(`op`: get, search, create or upload); `/__admin/clear-failures`, `/__admin/state`, `/__admin/reset`.
+The completion screen only links to real Google Drive folders.
+
+## 25. Security
+
+- **Access gate:** set `STUDIO_ACCESS_PASSWORD` (and the generated `STUDIO_SESSION_SECRET`) to require sign-in for
+  every page, API route and Server Action (`apps/web/src/proxy.ts`). The session is a 30-day HMAC-signed HttpOnly
+  cookie (`SameSite=Lax`, `Secure` behind HTTPS). Five wrong passwords per client in 10 minutes are refused.
+  Exempt: `/login`, `/api/health`, and `/api/internal/*` (bearer token). There are no per-user accounts in
+  Milestone 1.
+- **Headers:** CSP (`default-src 'self'`, no third-party origins, `frame-ancestors 'none'`), `X-Frame-Options`,
+  `nosniff`, `Referrer-Policy`, `Permissions-Policy`, COOP (`next.config.ts`). Set HSTS at the reverse proxy.
+- **Secrets:** API keys and OAuth tokens live only in n8n credentials (encrypted with `N8N_ENCRYPTION_KEY`, so back
+  it up). The web app holds only the two shared tokens and the DB URL. Nothing secret uses a `NEXT_PUBLIC_` prefix.
+- **Limits:** JSON API bodies 64 KB, Server Actions 1 MB, images 20 MB (PNG/JPEG/WebP by magic bytes), brief
+  4,000 characters, refinement 1,000, concepts 2–5 per request.
+- **Production checklist:** TLS reverse proxy; only `web` published; block `/api/internal/*` at the proxy;
+  n8n editor behind VPN/IP allow-list; n8n webhooks reachable only from `web`; `DRIVE_MODE=live`;
+  `COMPOSE_PROFILES=n8n` (never `drive-test`); a strong `STUDIO_ACCESS_PASSWORD`; back up `pg_data`,
+  `n8n_data`, `assets_data` and `.env`.
