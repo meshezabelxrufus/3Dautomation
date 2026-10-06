@@ -23,3 +23,6 @@ test-results/
 
 # Local, machine-specific notes (never published)
 docs/local/
+
+# Local asset storage for the dev server
+apps/web/.data/

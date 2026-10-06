@@ -93,6 +93,9 @@ services:
       N8N_PAYLOAD_SIZE_MAX: ${N8N_PAYLOAD_SIZE_MAX:-64}
       EXECUTIONS_DATA_PRUNE: "true"
       EXECUTIONS_DATA_MAX_AGE: ${EXECUTIONS_DATA_MAX_AGE:-336}
+    extra_hosts:
+      # Lets n8n reach a dev server running on the host (N8N_APP_BASE_URL=http://host.docker.internal:3101).
+      - "host.docker.internal:host-gateway"
     volumes:
       - n8n_data:/home/node/.n8n
     ports:
@@ -104,6 +107,22 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+    logging: *default-logging
+
+  # Google Drive v3 test double (infra/fake-drive): only with COMPOSE_PROFILES containing "drive-test".
+  # Lets the Drive export workflow run end to end, with injected failures, without a Google account.
+  fake-drive:
+    image: node:22-alpine
+    profiles: ["drive-test"]
+    restart: unless-stopped
+    command: ["node", "/srv/server.mjs"]
+    environment:
+      PORT: 4010
+      PUBLIC_URL: http://localhost:${FAKE_DRIVE_HOST_PORT:-4010}
+    volumes:
+      - ./infra/fake-drive:/srv:ro
+    ports:
+      - "127.0.0.1:${FAKE_DRIVE_HOST_PORT:-4010}:4010"
     logging: *default-logging
 
   # One-shot: applies pending database migrations, then exits. `web` waits for it.
@@ -144,6 +163,21 @@ services:
       CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-5-5}
       CLAUDE_EFFORT: ${CLAUDE_EFFORT:-high}
       AI_MOCK_SCENARIO: ${AI_MOCK_SCENARIO:-}
+      IMAGE_MODEL: ${IMAGE_MODEL:-gemini-3.1-flash-image}
+      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-gemini}
+      POLLINATIONS_MODEL: ${POLLINATIONS_MODEL:-}
+      POLLINATIONS_VIEW_MODEL: ${POLLINATIONS_VIEW_MODEL:-}
+      # Google Drive delivery: "live" (Google, via the n8n credential) or "test" (local Drive test double).
+      DRIVE_MODE: ${DRIVE_MODE:-live}
+      DRIVE_PARENT_FOLDER_ID: ${DRIVE_PARENT_FOLDER_ID:-}
+      AI_IMAGE_MOCK_SCENARIO: ${AI_IMAGE_MOCK_SCENARIO:-}
+      # n8n authenticates its image uploads/downloads with this (Authorization: Bearer …).
+      N8N_CALLBACK_TOKEN: ${N8N_CALLBACK_TOKEN:?set N8N_CALLBACK_TOKEN in .env (run scripts/init-env.sh)}
+      # Studio access gate: set a password to require sign-in (always set it when the app is reachable
+      # beyond localhost). The session secret signs the cookie.
+      STUDIO_ACCESS_PASSWORD: ${STUDIO_ACCESS_PASSWORD:-}
+      STUDIO_SESSION_SECRET: ${STUDIO_SESSION_SECRET:-}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       ASSET_STORAGE_DIR: /data/assets
     extra_hosts:
       - "host.docker.internal:host-gateway"

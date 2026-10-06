@@ -55,6 +55,8 @@ run_checks() {
     if printf '%s' "$body" | grep -q '"n8n":{"status":"ok"'; then pass "web -> n8n connectivity"; else fail "web -> n8n connectivity"; fi
   fi
   check "GET $WEB_URL/ (frontend) returns 200" curl -fsS -o /dev/null "$WEB_URL/"
+  internal=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$WEB_URL/api/internal/assets" -H 'content-type: application/json' -d '{}')
+  if [ "$internal" = 401 ]; then pass "internal asset API rejects calls without the callback token (401)"; else fail "internal asset API protected (got HTTP $internal)"; fi
 
   echo "== Database"
   check "app_user can query '$APP_DB_NAME'" psql_as "$APP_DB_USER" "$APP_DB_PASSWORD" "$APP_DB_NAME" "select 1"
@@ -69,8 +71,8 @@ run_checks() {
   echo "== Schema"
   mid=$(docker compose ps -a -q migrate 2>/dev/null || true)
   if [ -n "$mid" ] && [ "$(docker inspect -f '{{.State.ExitCode}}' "$mid" 2>/dev/null)" = "0" ]; then pass "migrate service completed (exit 0)"; else fail "migrate service completed (exit 0)"; fi
-  tables=$(psql_as "$APP_DB_USER" "$APP_DB_PASSWORD" "$APP_DB_NAME" "select count(*) from information_schema.tables where table_schema='public' and table_name in ('projects','concepts','revisions','final_designs','final_views','project_events','workflow_status_transitions')" 2>/dev/null || echo 0)
-  if [ "$tables" = 7 ]; then pass "workflow tables present (7/7)"; else fail "workflow tables present ($tables/7)"; fi
+  tables=$(psql_as "$APP_DB_USER" "$APP_DB_PASSWORD" "$APP_DB_NAME" "select count(*) from information_schema.tables where table_schema='public' and table_name in ('projects','concepts','revisions','final_designs','final_views','project_events','workflow_status_transitions','assets')" 2>/dev/null || echo 0)
+  if [ "$tables" = 8 ]; then pass "workflow tables present (8/8)"; else fail "workflow tables present ($tables/8)"; fi
   transitions=$(psql_as "$APP_DB_USER" "$APP_DB_PASSWORD" "$APP_DB_NAME" "select count(*) from workflow_status_transitions" 2>/dev/null || echo 0)
   if [ "${transitions:-0}" -gt 0 ]; then pass "state transitions seeded ($transitions)"; else fail "state transitions seeded"; fi
 
@@ -79,7 +81,7 @@ run_checks() {
     check "GET $N8N_URL/healthz" curl -fsS -o /dev/null "$N8N_URL/healthz"
     check "GET $N8N_URL/healthz/readiness (DB connected)" curl -fsS -o /dev/null "$N8N_URL/healthz/readiness"
     check "editor UI served at $N8N_URL/" curl -fsS -o /dev/null "$N8N_URL/"
-    for wh in project-create concepts-generate; do
+    for wh in project-create concepts-generate concept-image-generate concept-refine views-generate view-image-generate drive-export; do
       hook=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$N8N_URL/webhook/3d-studio/$wh" -H 'content-type: application/json' -d '{}')
       if [ "$hook" = 403 ]; then pass "$wh workflow deployed and rejects calls without the token (403)"; else fail "$wh workflow deployed and protected (got HTTP $hook; deploy with: pnpm n8n:credentials && pnpm n8n:deploy)"; fi
     done
